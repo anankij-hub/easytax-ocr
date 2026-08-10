@@ -219,16 +219,15 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
     return None
 
 
-def validate_thai_tax_id(tax_id):
-    """Checksum validation for a 13-digit Thai taxpayer ID (mod 11)."""
+def has_valid_tax_id_format(tax_id):
+    """Just checks the taxpayer ID is 13 digits — no mod-11 checksum
+    validation. (Checksum validation was removed on request: extracting
+    the number correctly is enough, it doesn't need to also pass a
+    checksum to be accepted.)"""
     if not tax_id:
         return False
     digits = re.sub(r"\D", "", tax_id)
-    if len(digits) != 13:
-        return False
-    total = sum(int(d) * (13 - i) for i, d in enumerate(digits[:12]))
-    check = (11 - (total % 11)) % 10
-    return check == int(digits[12])
+    return len(digits) == 13
 
 
 def extract_tax_id(text):
@@ -367,13 +366,14 @@ def extract_buyer_name(text):
 
 
 def classify_doc_type(fields):
-    """เต็มรูป ต้องมีเลขผู้เสียภาษีผู้ขายที่ผ่าน checksum + เลขที่ใบกำกับ + ชื่อผู้ซื้อ
-    ถ้าขาดอย่างใดอย่างหนึ่ง ถือเป็นใบย่อ (หัก VAT ซื้อไม่ได้)."""
+    """เต็มรูป ต้องมีเลขผู้เสียภาษีผู้ขาย (13 หลัก) + เลขที่ใบกำกับ + ชื่อผู้ซื้อ
+    ถ้าขาดอย่างใดอย่างหนึ่ง ถือเป็นใบย่อ (หัก VAT ซื้อไม่ได้). ไม่ตรวจสอบ checksum
+    ของเลขผู้เสียภาษีอีกต่อไป — แค่สกัดเลขออกมาได้ครบ 13 หลักก็พอ."""
     has_marker = fields.get("_has_tax_invoice_marker")
-    valid_tax_id = fields.get("seller_tax_id") and validate_thai_tax_id(fields["seller_tax_id"])
+    has_tax_id = has_valid_tax_id_format(fields.get("seller_tax_id"))
     has_invoice_no = bool(fields.get("invoice_no"))
     has_buyer = bool(fields.get("buyer_name"))
-    if has_marker and valid_tax_id and has_invoice_no and has_buyer:
+    if has_marker and has_tax_id and has_invoice_no and has_buyer:
         return "เต็มรูป"
     return "ย่อ"
 
@@ -386,8 +386,6 @@ def build_review_reasons(fields):
         reasons.append("ไม่พบวันที่")
     if not fields.get("seller_tax_id"):
         reasons.append("ไม่พบเลขประจำตัวผู้เสียภาษีผู้ขาย")
-    elif not validate_thai_tax_id(fields["seller_tax_id"]):
-        reasons.append("เลขผู้เสียภาษีไม่ผ่านการตรวจสอบ checksum")
     if fields.get("total") is None:
         reasons.append("ไม่พบยอดรวม")
     if fields.get("ocr_confidence") is not None and fields["ocr_confidence"] < 60:

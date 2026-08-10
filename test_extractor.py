@@ -248,7 +248,6 @@ def main():
     all_ok &= check("invoice_no extracted", fields["invoice_no"] == "IV68012207-09")
     all_ok &= check("date parsed to ISO", fields["invoice_date_iso"] == "2025-12-07")
     all_ok &= check("seller tax id extracted", fields["seller_tax_id"] == "0105567123468")
-    all_ok &= check("tax id checksum valid", extractor.validate_thai_tax_id(fields["seller_tax_id"]))
     all_ok &= check("buyer name extracted", fields["buyer_name"] is not None)
     all_ok &= check("vat = 140.0", fields["vat"] == 140.0)
     all_ok &= check("total = 2140.0", fields["total"] == 2140.0)
@@ -263,8 +262,8 @@ def main():
     all_ok &= check("total = 1050.0", fields2["total"] == 1050.0)
     all_ok &= check("flagged for review (missing tax id/invoice no)", fields2["needs_review"] is True)
 
-    # bad checksum should fail validation
-    all_ok &= check("bad checksum rejected", extractor.validate_thai_tax_id("0105567123469") is False)
+    all_ok &= check("13-digit tax id format accepted", extractor.has_valid_tax_id_format("0105567123469"))
+    all_ok &= check("12-digit (too short) tax id rejected", extractor.has_valid_tax_id_format("010556712346") is False)
 
     # regression: real vendor invoice with "เลขที่เอกสาร" printed above the
     # real "เลขที่ใบกำกับภาษี", a colon-separated buyer name, and a
