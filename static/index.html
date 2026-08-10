@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>EasyTax OCR — ระบบจัดการใบกำกับภาษีด้วย OCR</title>
+<style>
+  :root {
+    --blue: #2563eb; --blue-dark: #1d4ed8; --green: #16a34a; --amber: #b45309;
+    --red: #dc2626; --gray-50:#f8fafc; --gray-100:#f1f5f9; --gray-200:#e2e8f0;
+    --gray-500:#64748b; --gray-700:#334155; --gray-900:#0f172a;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Sarabun", Tahoma, sans-serif; background: var(--gray-50); margin:0; color: var(--gray-900); }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; background:#fff; border-bottom:1px solid var(--gray-200); }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .brand .logo { width:44px; height:44px; border-radius:10px; background:var(--blue); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; }
+  .brand h1 { font-size:18px; margin:0; color:var(--blue-dark); }
+  .brand p { font-size:12px; margin:0; color: var(--gray-500); }
+  select#clientSelect { padding:8px 12px; border:1px solid var(--gray-200); border-radius:8px; background:#fff; }
+  nav { display:flex; gap:4px; padding:0 24px; background:#fff; border-bottom:1px solid var(--gray-200); }
+  nav button { border:none; background:none; padding:14px 10px; cursor:pointer; font-size:14px; color:var(--gray-500); border-bottom:2px solid transparent; }
+  nav button.active { color: var(--blue); border-bottom-color: var(--blue); font-weight:600; }
+  main { padding:24px; max-width:1200px; margin: 0 auto; }
+  .tab { display:none; }
+  .tab.active { display:block; }
+  .cards { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:16px; margin-bottom:24px; }
+  .card { background:#fff; border:1px solid var(--gray-200); border-radius:12px; padding:16px; }
+  .card .label { font-size:12px; color:var(--gray-500); margin-bottom:8px; }
+  .card .value { font-size:24px; font-weight:700; }
+  .card .sub { font-size:11px; color:var(--gray-500); margin-top:4px; }
+  .panel { background:#fff; border:1px solid var(--gray-200); border-radius:12px; padding:20px; margin-bottom:20px; }
+  .panel h3 { margin-top:0; color: var(--blue-dark); font-size:15px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--gray-100); }
+  th { color:var(--gray-500); font-weight:600; }
+  .badge { padding:2px 8px; border-radius:999px; font-size:11px; }
+  .badge.full { background:#dcfce7; color:#166534; }
+  .badge.short { background:#fef3c7; color:#92400e; }
+  .badge.review { background:#fee2e2; color:#991b1b; }
+  .btn { background: var(--blue); color:#fff; border:none; border-radius:8px; padding:10px 16px; font-size:13px; cursor:pointer; }
+  .btn.secondary { background:#fff; color:var(--blue); border:1px solid var(--blue); }
+  .btn.danger { background:#fff; color:var(--red); border:1px solid var(--red); }
+  input[type=text] { padding:8px 10px; border:1px solid var(--gray-200); border-radius:8px; width:280px; }
+  .dropzone { border:2px dashed var(--gray-200); border-radius:12px; padding:48px; text-align:center; color:var(--gray-500); }
+  .dropzone.drag { border-color: var(--blue); background:#eff6ff; }
+  .toolbar { display:flex; gap:12px; align-items:center; margin-bottom:16px; flex-wrap:wrap; justify-content:space-between; }
+  .status-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--gray-100); font-size:13px; }
+  .status-ok { color: var(--green); }
+  .status-err { color: var(--red); }
+  .edit-input { width:100%; padding:4px 6px; border:1px solid var(--gray-200); border-radius:6px; font-size:12px; }
+  .export-item { display:flex; justify-content:space-between; align-items:center; padding:16px; border:1px solid var(--gray-200); border-radius:10px; margin-bottom:12px; }
+  .muted { color: var(--gray-500); font-size:12px; }
+  svg text { font-family: inherit; }
+
+  /* edit modal */
+  .modal-overlay {
+    position:fixed; inset:0; background:rgba(15,23,42,0.5); display:flex;
+    align-items:flex-start; justify-content:center; padding:32px 16px; z-index:100; overflow:auto;
+  }
+  .modal-box { background:#fff; border-radius:14px; width:100%; max-width:1100px; max-height:calc(100vh - 64px); display:flex; flex-direction:column; overflow:hidden; }
+  .modal-header { display:flex; justify-content:space-between; align-items:flex-start; padding:20px 24px; border-bottom:1px solid var(--gray-200); }
+  .modal-header h3 { margin:0; font-size:16px; }
+  .modal-header p { margin:2px 0 0; font-size:12px; color:var(--gray-500); }
+  .modal-close { border:none; background:none; font-size:20px; cursor:pointer; color:var(--gray-500); line-height:1; }
+  .modal-body { display:grid; grid-template-columns: 1fr 1fr; gap:0; overflow:auto; }
+  .modal-preview { border-right:1px solid var(--gray-200); padding:20px; background:var(--gray-50); overflow:auto; }
+  .modal-preview img { width:100%; border-radius:8px; border:1px solid var(--gray-200); }
+  .modal-preview .muted { text-align:center; margin-top:40px; }
+  .modal-form { padding:20px 24px; overflow:auto; }
+  .doctype-banner { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; border-radius:10px; margin-bottom:16px; font-size:13px; font-weight:600; }
+  .doctype-banner.full { background:#dcfce7; color:#166534; }
+  .doctype-banner.short { background:#fef3c7; color:#92400e; }
+  .reason-box { background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; font-size:12px; padding:10px 12px; border-radius:8px; margin-bottom:16px; }
+  .form-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px 16px; margin-bottom:16px; }
+  .form-grid .full-width { grid-column: 1 / -1; }
+  .form-field label { display:block; font-size:12px; color:var(--gray-500); margin-bottom:4px; }
+  .form-field select, .form-field input[type=text], .form-field input[type=number] {
+    width:100%; padding:8px 10px; border:1px solid var(--gray-200); border-radius:8px; font-size:13px;
+  }
+  .items-table { width:100%; border-collapse:collapse; margin-bottom:12px; }
+  .items-table th { font-size:11px; color:var(--gray-500); text-align:left; padding:6px 4px; }
+  .items-table td { padding:4px; }
+  .items-table input { width:100%; padding:6px 8px; border:1px solid var(--gray-200); border-radius:6px; font-size:12px; }
+  .items-table input.desc { width:100%; }
+  .items-table input.num { text-align:right; }
+  .modal-footer { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; border-top:1px solid var(--gray-200); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="logo">ET</div>
+    <div>
+      <h1>ระบบจัดการใบกำกับภาษีด้วย OCR</h1>
+      <p id="userEmail">projectit688@gmail.com</p>
+    </div>
+  </div>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <select id="clientSelect"></select>
+    <button class="btn secondary" style="padding:8px 12px;" onclick="openClientModal()">+ จัดการลูกค้า</button>
+  </div>
+</header>
+
+<nav>
+  <button data-tab="dashboard" class="active">แดชบอร์ด</button>
+  <button data-tab="upload">อัปโหลด</button>
+  <button data-tab="invoices">ใบกำกับภาษี</button>
+  <button data-tab="export">รายงาน / Export</button>
+  <button data-tab="activity">ประวัติการทำงาน</button>
+</nav>
+
+<main>
+
+  <!-- DASHBOARD -->
+  <div class="tab active" id="tab-dashboard">
+    <div class="cards" id="kpiCards"></div>
+    <div class="panel">
+      <h3>VAT และยอดรวมรายเดือน (12 เดือนล่าสุด)</h3>
+      <svg id="chart" width="100%" height="260" viewBox="0 0 1000 260"></svg>
+    </div>
+    <div class="panel">
+      <h3>เอกสารล่าสุด</h3>
+      <div id="recentList"></div>
+    </div>
+  </div>
+
+  <!-- UPLOAD -->
+  <div class="tab" id="tab-upload">
+    <div class="panel">
+      <div class="dropzone" id="dropzone">
+        <p style="font-size:32px; margin:0;">⬆</p>
+        <p><strong>ลากไฟล์ใบกำกับภาษีมาวางที่นี่</strong></p>
+        <p class="muted">รองรับ PDF, JPG, PNG — เลือกได้หลายไฟล์พร้อมกัน</p>
+        <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png" style="display:none" />
+        <button class="btn" onclick="document.getElementById('fileInput').click()">เลือกไฟล์</button>
+      </div>
+    </div>
+    <div class="panel" id="uploadStatusPanel" style="display:none">
+      <h3>สถานะการประมวลผล</h3>
+      <div id="uploadStatus"></div>
+    </div>
+  </div>
+
+  <!-- INVOICES -->
+  <div class="tab" id="tab-invoices">
+    <div class="toolbar">
+      <input type="text" id="searchBox" placeholder="ค้นหาชื่อบริษัท เลขใบกำกับ วันที่ หรือเลขผู้เสียภาษี" />
+      <select id="statusFilter">
+        <option value="">ทั้งหมด</option>
+        <option value="needs_review">ต้องตรวจสอบ</option>
+      </select>
+    </div>
+    <div class="panel">
+      <table id="invoiceTable">
+        <thead>
+          <tr>
+            <th></th><th>บริษัทผู้ออกใบกำกับ</th><th>เลขผู้เสียภาษี</th><th>เลขที่ใบกำกับ</th>
+            <th>วันที่</th><th>ประเภท</th><th>VAT</th><th>ยอดรวม</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="invoiceRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- EXPORT -->
+  <div class="tab" id="tab-export">
+    <div class="export-item">
+      <div><strong>ส่งออกรายงาน</strong><div class="muted">ส่งออกรายการใบกำกับภาษีทั้งหมดเป็นไฟล์ CSV เปิดได้ด้วย Excel</div></div>
+      <button class="btn" onclick="exportCsv('all')">Export CSV</button>
+    </div>
+    <div class="export-item">
+      <div><strong>เฉพาะเดือนนี้</strong><div class="muted">รายการในเดือนปัจจุบัน</div></div>
+      <button class="btn secondary" onclick="exportCsv('month')">Export CSV (เดือนนี้)</button>
+    </div>
+    <div class="export-item">
+      <div><strong>เฉพาะที่ใช้ยื่น ภ.พ.30 ได้ (ใบเต็มรูป)</strong><div class="muted">ตัดใบย่อออกให้แล้ว</div></div>
+      <button class="btn secondary" onclick="exportCsv('full_only')">Export CSV (หักภาษีซื้อได้)</button>
+    </div>
+    <div class="export-item">
+      <div><strong>รายการที่ต้องตรวจสอบ</strong><div class="muted">ข้อมูลอาจไม่ครบหรือไม่ถูกต้อง</div></div>
+      <button class="btn danger" onclick="exportCsv('review')">Export CSV (ต้องตรวจสอบ)</button>
+    </div>
+  </div>
+
+  <!-- ACTIVITY -->
+  <div class="tab" id="tab-activity">
+    <div class="panel">
+      <h3>ประวัติการทำงาน</h3>
+      <div id="activityList"></div>
+    </div>
+  </div>
+
+</main>
+
+<div class="modal-overlay" id="clientModalOverlay" style="display:none">
+  <div class="modal-box" style="max-width:480px;">
+    <div class="modal-header">
+      <div><h3>จัดการลูกค้า</h3><p>เพิ่มลูกค้าใหม่ หรือดูรายชื่อลูกค้าทั้งหมด</p></div>
+      <button class="modal-close" onclick="closeClientModal()">✕</button>
+    </div>
+    <div style="padding:20px 24px;">
+      <div style="display:flex; gap:8px; margin-bottom:20px;">
+        <input type="text" id="newClientName" placeholder="ชื่อลูกค้า / บริษัท" style="flex:1; padding:8px 10px; border:1px solid var(--gray-200); border-radius:8px; font-size:13px;" />
+        <button class="btn" onclick="createClient()">+ เพิ่มลูกค้า</button>
+      </div>
+      <div id="clientModalError" class="reason-box" style="display:none; margin-bottom:12px;"></div>
+      <label style="font-size:12px; color:var(--gray-500); display:block; margin-bottom:8px;">ลูกค้าทั้งหมด</label>
+      <div id="clientModalList" style="max-height:320px; overflow:auto;"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="editModalOverlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div>
+        <h3 id="modalFilename">—</h3>
+        <p id="modalClientName">—</p>
+      </div>
+      <button class="modal-close" onclick="closeEditModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-preview" id="modalPreview"></div>
+      <div class="modal-form">
+        <div class="doctype-banner" id="modalDocTypeBanner"></div>
+        <div id="modalReasonBox"></div>
+
+        <div class="form-field" style="margin-bottom:16px">
+          <label>แก้ไขประเภท (ถ้า OCR จำแนกผิด)</label>
+          <select id="f_doc_type">
+            <option value="เต็มรูป">เต็มรูป (หักภาษีซื้อได้)</option>
+            <option value="ย่อ">ย่อ (หักภาษีซื้อไม่ได้)</option>
+          </select>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-field full-width">
+            <label>ชื่อบริษัทผู้ออกใบกำกับ</label>
+            <input type="text" id="f_seller_name" />
+          </div>
+          <div class="form-field">
+            <label>เลขผู้เสียภาษี (13 หลัก)</label>
+            <input type="text" id="f_seller_tax_id" />
+          </div>
+          <div class="form-field">
+            <label>เลขที่ใบกำกับภาษี</label>
+            <input type="text" id="f_invoice_no" />
+          </div>
+          <div class="form-field">
+            <label>วันที่ (YYYY-MM-DD)</label>
+            <input type="text" id="f_invoice_date" />
+          </div>
+          <div class="form-field">
+            <label>ชื่อผู้ซื้อ</label>
+            <input type="text" id="f_buyer_name" />
+          </div>
+          <div class="form-field">
+            <label>ยอดก่อนภาษี</label>
+            <input type="number" step="0.01" id="f_subtotal" />
+          </div>
+          <div class="form-field">
+            <label>VAT</label>
+            <input type="number" step="0.01" id="f_vat" />
+          </div>
+          <div class="form-field">
+            <label>ยอดรวม</label>
+            <input type="number" step="0.01" id="f_total" />
+          </div>
+        </div>
+
+        <label style="font-size:13px; font-weight:600; display:block; margin-bottom:8px;">รายการสินค้า</label>
+        <table class="items-table">
+          <thead><tr><th>รายการ</th><th style="width:70px">จำนวน</th><th style="width:90px">ราคา/หน่วย</th><th style="width:90px">รวม</th><th></th></tr></thead>
+          <tbody id="modalItemsBody"></tbody>
+        </table>
+        <button class="btn secondary" style="padding:6px 12px; font-size:12px; margin-bottom:8px;" onclick="addLineItemRow()">+ เพิ่มรายการ</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn danger" onclick="deleteFromModal()">🗑 ลบรายการนี้</button>
+      <div style="display:flex; gap:10px;">
+        <button class="btn secondary" onclick="closeEditModal()">ยกเลิก</button>
+        <button class="btn" onclick="saveEditModal()">บันทึก</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentClient = 'all';
+
+function fmtMoney(n) {
+  if (n === null || n === undefined) return '—';
+  return Number(n).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+async function loadClients(selectClientId) {
+  const res = await fetch('/api/clients');
+  const clients = await res.json();
+  modalClientNames = {};
+  clients.forEach(c => modalClientNames[c.id] = c.name);
+  const sel = document.getElementById('clientSelect');
+  sel.innerHTML = '<option value="all">ลูกค้าทั้งหมด</option>' +
+    clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  sel.onchange = () => { currentClient = sel.value; refreshActiveTab(); };
+  if (selectClientId) { sel.value = String(selectClientId); currentClient = sel.value; }
+  return clients;
+}
+
+// ---- manage clients modal ----
+function openClientModal() {
+  document.getElementById('newClientName').value = '';
+  document.getElementById('clientModalError').style.display = 'none';
+  document.getElementById('clientModalOverlay').style.display = 'flex';
+  renderClientModalList();
+}
+
+function closeClientModal() {
+  document.getElementById('clientModalOverlay').style.display = 'none';
+}
+
+async function renderClientModalList() {
+  const res = await fetch('/api/clients');
+  const clients = await res.json();
+  const list = document.getElementById('clientModalList');
+  list.innerHTML = clients.map(c => `
+    <div class="status-row"><span>${c.name}</span><span class="muted">${(c.created_at || '').slice(0,10)}</span></div>
+  `).join('') || '<p class="muted">ยังไม่มีลูกค้า</p>';
+}
+
+async function createClient() {
+  const input = document.getElementById('newClientName');
+  const errBox = document.getElementById('clientModalError');
+  const name = input.value.trim();
+  errBox.style.display = 'none';
+  if (!name) { errBox.textContent = 'กรุณากรอกชื่อลูกค้า'; errBox.style.display = 'block'; return; }
+
+  const res = await fetch('/api/clients', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errBox.textContent = data.error || 'เพิ่มลูกค้าไม่สำเร็จ';
+    errBox.style.display = 'block';
+    return;
+  }
+  input.value = '';
+  await loadClients(data.id);
+  await renderClientModalList();
+  refreshActiveTab();
+}
+
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    refreshActiveTab();
+  };
+});
+
+function activeTabName() {
+  return document.querySelector('nav button.active').dataset.tab;
+}
+
+function refreshActiveTab() {
+  const t = activeTabName();
+  if (t === 'dashboard') loadDashboard();
+  if (t === 'invoices') loadInvoices();
+  if (t === 'activity') loadActivity();
+}
+
+async function loadDashboard() {
+  const res = await fetch(`/api/dashboard?client_id=${currentClient}`);
+  const d = await res.json();
+  document.getElementById('kpiCards').innerHTML = `
+    <div class="card"><div class="label">จำนวนใบกำกับภาษี</div><div class="value" style="color:var(--blue)">${d.count}</div></div>
+    <div class="card"><div class="label">VAT หักภาษีซื้อได้ (ใบเต็มรูป)</div><div class="value" style="color:var(--green)">${fmtMoney(d.vat_deductible)}</div><div class="sub">ใช้ยื่น ภ.พ.30 ได้</div></div>
+    <div class="card"><div class="label">ใบย่อ (หักไม่ได้)</div><div class="value" style="color:var(--amber)">${d.vat_non_deductible_count} ใบ</div></div>
+    <div class="card"><div class="label">ยอดรวมทั้งหมด</div><div class="value">${fmtMoney(d.total_all)}</div></div>
+    <div class="card"><div class="label">ต้องตรวจสอบ</div><div class="value" style="color:var(--red)">${d.needs_review}</div></div>
+  `;
+  drawChart(d.monthly_series);
+  document.getElementById('recentList').innerHTML = d.recent.map(r => `
+    <div class="status-row">
+      <div>
+        <span style="color:${r.needs_review ? 'var(--red)' : 'var(--green)'}">${r.needs_review ? '⚠' : '✓'}</span>
+        <strong>${r.seller_name || '—'}</strong>
+        <span class="muted">${r.invoice_no || ''} · ${r.invoice_date || 'ไม่พบวันที่'}</span>
+      </div>
+      <div>${fmtMoney(r.total)}</div>
+    </div>
+  `).join('') || '<p class="muted">ยังไม่มีเอกสาร</p>';
+}
+
+function drawChart(series) {
+  const svg = document.getElementById('chart');
+  const w = 1000, h = 260, pad = 40;
+  if (!series.length) { svg.innerHTML = '<text x="20" y="130" fill="#94a3b8">ยังไม่มีข้อมูลรายเดือน</text>'; return; }
+  const maxVal = Math.max(...series.map(s => s.total), 1);
+  const barW = (w - pad * 2) / (series.length * 2.2);
+  let bars = '';
+  series.forEach((s, i) => {
+    const x = pad + i * ((w - pad * 2) / series.length);
+    const totalH = (s.total / maxVal) * (h - pad * 2);
+    const vatH = (s.vat / maxVal) * (h - pad * 2);
+    bars += `<rect x="${x}" y="${h - pad - totalH}" width="${barW}" height="${totalH}" fill="#2563eb" rx="2"/>`;
+    bars += `<rect x="${x + barW + 2}" y="${h - pad - vatH}" width="${barW}" height="${vatH}" fill="#b45309" rx="2"/>`;
+    bars += `<text x="${x + barW}" y="${h - pad + 16}" font-size="10" fill="#64748b" text-anchor="middle">${s.month.slice(2)}</text>`;
+  });
+  svg.innerHTML = bars;
+}
+
+async function loadInvoices() {
+  const q = document.getElementById('searchBox').value;
+  const status = document.getElementById('statusFilter').value;
+  const params = new URLSearchParams({ client_id: currentClient, q, status });
+  const res = await fetch(`/api/invoices?${params}`);
+  const rows = await res.json();
+  document.getElementById('invoiceRows').innerHTML = rows.map(r => `
+    <tr>
+      <td>${r.needs_review ? '<span style="color:var(--red)">⚠</span>' : '<span style="color:var(--green)">✓</span>'}</td>
+      <td>${r.seller_name || '—'}</td>
+      <td>${r.seller_tax_id || '—'}</td>
+      <td>${r.invoice_no || '—'}</td>
+      <td>${r.invoice_date || '—'}</td>
+      <td><span class="badge ${r.doc_type === 'เต็มรูป' ? 'full' : 'short'}">${r.doc_type}</span></td>
+      <td>${fmtMoney(r.vat)}</td>
+      <td>${fmtMoney(r.total)}</td>
+      <td>
+        <button class="btn secondary" style="padding:4px 8px" onclick="editInvoice(${r.id})">แก้ไข</button>
+        <button class="btn danger" style="padding:4px 8px" onclick="deleteInvoice(${r.id})">ลบ</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="9" class="muted">ไม่พบรายการ</td></tr>';
+}
+
+document.getElementById('searchBox').addEventListener('input', () => loadInvoices());
+document.getElementById('statusFilter').addEventListener('change', () => loadInvoices());
+
+// ---- edit modal ----
+let modalInvoiceId = null;
+let modalClientNames = {};
+
+async function ensureClientNames() {
+  if (Object.keys(modalClientNames).length) return;
+  const res = await fetch('/api/clients');
+  const clients = await res.json();
+  clients.forEach(c => modalClientNames[c.id] = c.name);
+}
+
+async function editInvoice(id) {
+  await ensureClientNames();
+  const res = await fetch(`/api/invoices/${id}`);
+  if (!res.ok) { alert('โหลดรายการไม่สำเร็จ'); return; }
+  const inv = await res.json();
+  openEditModal(inv);
+}
+
+function openEditModal(inv) {
+  modalInvoiceId = inv.id;
+  document.getElementById('modalFilename').textContent = inv.filename || '—';
+  document.getElementById('modalClientName').textContent = 'ลูกค้า: ' + (modalClientNames[inv.client_id] || inv.client_id);
+
+  const preview = document.getElementById('modalPreview');
+  if (inv.file_url) {
+    if (/\.pdf$/i.test(inv.filename || '')) {
+      preview.innerHTML = `<a class="btn secondary" href="${inv.file_url}" target="_blank">เปิดไฟล์ PDF ต้นฉบับ</a>`;
+    } else {
+      preview.innerHTML = `<img src="${inv.file_url}" alt="ไฟล์ต้นฉบับ" />`;
+    }
+  } else {
+    preview.innerHTML = '<p class="muted">ไม่มีไฟล์ต้นฉบับให้แสดง</p>';
+  }
+
+  const banner = document.getElementById('modalDocTypeBanner');
+  const isFull = inv.doc_type === 'เต็มรูป';
+  banner.className = 'doctype-banner ' + (isFull ? 'full' : 'short');
+  banner.textContent = isFull ? 'เต็มรูป — ใช้หักภาษีซื้อในการยื่น ภ.พ.30 ได้' : 'ย่อ — หักภาษีซื้อไม่ได้';
+
+  const reasonBox = document.getElementById('modalReasonBox');
+  reasonBox.innerHTML = inv.review_reason
+    ? `<div class="reason-box">เหตุผลจาก OCR: ${inv.review_reason}</div>` : '';
+
+  document.getElementById('f_doc_type').value = inv.doc_type || 'ย่อ';
+  document.getElementById('f_seller_name').value = inv.seller_name || '';
+  document.getElementById('f_seller_tax_id').value = inv.seller_tax_id || '';
+  document.getElementById('f_invoice_no').value = inv.invoice_no || '';
+  document.getElementById('f_invoice_date').value = inv.invoice_date || '';
+  document.getElementById('f_buyer_name').value = inv.buyer_name || '';
+  document.getElementById('f_subtotal').value = inv.subtotal ?? '';
+  document.getElementById('f_vat').value = inv.vat ?? '';
+  document.getElementById('f_total').value = inv.total ?? '';
+
+  const body = document.getElementById('modalItemsBody');
+  body.innerHTML = '';
+  (inv.line_items || []).forEach(item => addLineItemRow(item));
+  if (!(inv.line_items || []).length) addLineItemRow();
+
+  document.getElementById('editModalOverlay').style.display = 'flex';
+}
+
+function addLineItemRow(item) {
+  item = item || {};
+  const body = document.getElementById('modalItemsBody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="desc" type="text" value="${(item.description || '').replace(/"/g, '&quot;')}" /></td>
+    <td><input class="num" type="number" step="0.01" value="${item.qty ?? ''}" /></td>
+    <td><input class="num" type="number" step="0.01" value="${item.unit_price ?? ''}" /></td>
+    <td><input class="num" type="number" step="0.01" value="${item.amount ?? ''}" /></td>
+    <td><button class="btn danger" style="padding:4px 8px" onclick="this.closest('tr').remove()">✕</button></td>
+  `;
+  body.appendChild(tr);
+}
+
+function closeEditModal() {
+  document.getElementById('editModalOverlay').style.display = 'none';
+  modalInvoiceId = null;
+}
+
+function collectLineItems() {
+  return [...document.querySelectorAll('#modalItemsBody tr')].map(tr => {
+    const inputs = tr.querySelectorAll('input');
+    return {
+      description: inputs[0].value.trim(),
+      qty: inputs[1].value === '' ? null : Number(inputs[1].value),
+      unit_price: inputs[2].value === '' ? null : Number(inputs[2].value),
+      amount: inputs[3].value === '' ? null : Number(inputs[3].value),
+    };
+  }).filter(it => it.description || it.qty || it.unit_price || it.amount);
+}
+
+async function saveEditModal() {
+  if (!modalInvoiceId) return;
+  const payload = {
+    doc_type: document.getElementById('f_doc_type').value,
+    seller_name: document.getElementById('f_seller_name').value,
+    seller_tax_id: document.getElementById('f_seller_tax_id').value,
+    invoice_no: document.getElementById('f_invoice_no').value,
+    invoice_date: document.getElementById('f_invoice_date').value,
+    buyer_name: document.getElementById('f_buyer_name').value,
+    subtotal: document.getElementById('f_subtotal').value === '' ? null : Number(document.getElementById('f_subtotal').value),
+    vat: document.getElementById('f_vat').value === '' ? null : Number(document.getElementById('f_vat').value),
+    total: document.getElementById('f_total').value === '' ? null : Number(document.getElementById('f_total').value),
+    needs_review: 0,
+    review_reason: null,
+    line_items: collectLineItems(),
+  };
+  await fetch(`/api/invoices/${modalInvoiceId}`, {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  closeEditModal();
+  loadInvoices();
+  if (activeTabName() === 'dashboard') loadDashboard();
+}
+
+async function deleteFromModal() {
+  if (!modalInvoiceId) return;
+  if (!confirm('ลบรายการนี้?')) return;
+  await fetch(`/api/invoices/${modalInvoiceId}`, { method: 'DELETE' });
+  closeEditModal();
+  loadInvoices();
+}
+
+async function deleteInvoice(id) {
+  if (!confirm('ลบรายการนี้?')) return;
+  await fetch(`/api/invoices/${id}`, { method: 'DELETE' });
+  loadInvoices();
+}
+
+async function loadActivity() {
+  const res = await fetch(`/api/activity?client_id=${currentClient}`);
+  const rows = await res.json();
+  document.getElementById('activityList').innerHTML = rows.map(r => `
+    <div class="status-row">
+      <div><strong>${r.action}</strong> <span class="muted">${r.detail ? r.detail.slice(0,80) : ''}</span></div>
+      <div class="muted">${r.created_at}</div>
+    </div>
+  `).join('') || '<p class="muted">ยังไม่มีประวัติ</p>';
+}
+
+function exportCsv(scope) {
+  window.location.href = `/api/export.csv?client_id=${currentClient}&scope=${scope}`;
+}
+
+// ---- upload handling ----
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+
+['dragover','dragenter'].forEach(evt => dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.add('drag'); }));
+['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+dropzone.addEventListener('drop', e => { uploadFiles(e.dataTransfer.files); });
+fileInput.addEventListener('change', e => uploadFiles(e.target.files));
+
+async function uploadFiles(fileList) {
+  if (!fileList.length) return;
+  const clientForUpload = currentClient === 'all' ? (document.getElementById('clientSelect').options[1]?.value || 'all') : currentClient;
+  const fd = new FormData();
+  fd.append('client_id', clientForUpload);
+  for (const f of fileList) fd.append('files', f);
+
+  const panel = document.getElementById('uploadStatusPanel');
+  const statusDiv = document.getElementById('uploadStatus');
+  panel.style.display = 'block';
+  statusDiv.innerHTML = '<p class="muted">กำลังประมวลผล...</p>';
+
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    statusDiv.innerHTML = data.results.map(r => `
+      <div class="status-row">
+        <span>${r.status === 'ok' ? '✓' : '✗'} ${r.filename}</span>
+        <span class="${r.status === 'ok' ? 'status-ok' : 'status-err'}">
+          ${r.status === 'ok' ? `สร้าง ${r.invoices_created} รายการ (${r.pages} หน้า)` : r.message}
+        </span>
+      </div>
+    `).join('');
+  } catch (err) {
+    statusDiv.innerHTML = `<p class="status-err">อัปโหลดล้มเหลว: ${err}</p>`;
+  }
+}
+
+loadClients().then(loadDashboard);
+</script>
+</body>
+</html>
