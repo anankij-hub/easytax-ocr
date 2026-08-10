@@ -76,6 +76,25 @@ def index():
         return Response(f.read(), mimetype="text/html")
 
 
+@app.route("/api/health")
+def health():
+    """Diagnostic endpoint — hit this to see exactly what's broken instead
+    of guessing from a generic 500 page. Safe to leave in place; it doesn't
+    expose secret values, only whether they're set."""
+    info = {
+        "static_dir_exists": os.path.isdir(STATIC_DIR),
+        "index_html_exists": os.path.isfile(os.path.join(STATIC_DIR, "index.html")),
+        "database_url_set": bool(os.environ.get("DATABASE_URL")),
+        "google_vision_api_key_set": bool(os.environ.get("GOOGLE_VISION_API_KEY")),
+    }
+    try:
+        ensure_db()
+        info["db_connection"] = "ok"
+    except Exception as e:
+        info["db_connection"] = f"error: {e}"
+    return jsonify(info)
+
+
 # --------------------------------------------------------------- clients --
 @app.route("/api/clients", methods=["GET"])
 def list_clients():
@@ -203,7 +222,7 @@ def get_invoice(invoice_id):
         cur.execute(
             "SELECT id, client_id, filename, doc_type, invoice_no, invoice_date, invoice_date_raw, "
             "seller_name, seller_tax_id, buyer_name, subtotal, vat, total, needs_review, review_reason, "
-            "ocr_confidence, file_mime, line_items, created_at FROM invoices WHERE id = %s",
+            "ocr_confidence, file_mime, line_items, raw_text, created_at FROM invoices WHERE id = %s",
             (invoice_id,),
         )
         row = cur.fetchone()

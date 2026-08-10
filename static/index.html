@@ -228,6 +228,15 @@
         <div class="doctype-banner" id="modalDocTypeBanner"></div>
         <div id="modalReasonBox"></div>
 
+        <button type="button" class="btn secondary" id="modalRawTextToggle" style="padding:4px 10px; font-size:12px; margin-bottom:8px;" onclick="toggleRawOcrText()">ดูข้อความ OCR ดิบ</button>
+        <div id="modalRawTextBox" style="margin-bottom:16px; display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:12px; color:#666;">ข้อความที่ OCR อ่านได้จริง — คัดลอกส่งไปตรวจสอบ/แก้ไข regex ได้ถ้าฟิลด์ยังผิด</span>
+            <button type="button" class="btn secondary" style="padding:2px 8px; font-size:11px;" onclick="copyRawOcrText()">คัดลอก</button>
+          </div>
+          <pre id="modalRawText" style="max-height:180px; overflow:auto; background:#f5f5f5; padding:8px; font-size:11px; white-space:pre-wrap; border-radius:6px; margin:0;"></pre>
+        </div>
+
         <div class="form-field" style="margin-bottom:16px">
           <label>แก้ไขประเภท (ถ้า OCR จำแนกผิด)</label>
           <select id="f_doc_type">
@@ -446,6 +455,21 @@ document.getElementById('statusFilter').addEventListener('change', () => loadInv
 // ---- edit modal ----
 let modalInvoiceId = null;
 let modalClientNames = {};
+let modalRawText = '';
+
+function toggleRawOcrText() {
+  const box = document.getElementById('modalRawTextBox');
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
+function copyRawOcrText() {
+  if (!modalRawText) return;
+  navigator.clipboard.writeText(modalRawText).then(() => {
+    alert('คัดลอกข้อความ OCR แล้ว');
+  }).catch(() => {
+    alert('คัดลอกไม่สำเร็จ ลองเลือกข้อความแล้วคัดลอกเองแทน');
+  });
+}
 
 async function ensureClientNames() {
   if (Object.keys(modalClientNames).length) return;
@@ -486,6 +510,11 @@ function openEditModal(inv) {
   const reasonBox = document.getElementById('modalReasonBox');
   reasonBox.innerHTML = inv.review_reason
     ? `<div class="reason-box">เหตุผลจาก OCR: ${inv.review_reason}</div>` : '';
+
+  modalRawText = inv.raw_text || '';
+  document.getElementById('modalRawTextBox').style.display = 'none';
+  document.getElementById('modalRawText').textContent = modalRawText;
+  document.getElementById('modalRawTextToggle').style.display = modalRawText ? '' : 'none';
 
   document.getElementById('f_doc_type').value = inv.doc_type || 'ย่อ';
   document.getElementById('f_seller_name').value = inv.seller_name || '';

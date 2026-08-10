@@ -36,14 +36,27 @@ INVOICE_NO_KEYWORDS = [
 ]
 DATE_KEYWORDS = [r"วันที่", r"Date"]
 VAT_KEYWORDS = [r"ภาษีมูลค่าเพิ่ม", r"VAT", r"Vat"]
-SUBTOTAL_KEYWORDS = [r"มูลค่าสินค้า", r"รวมเป็นเงิน", r"รวมเงิน", r"Subtotal", r"จำนวนเงิน"]
+# Most specific / least ambiguous first. Deliberately does NOT include the
+# bare word "จำนวนเงิน" — that phrase is also the line-items table's column
+# header ("...ราคา/หน่วย  ส่วนลด  จำนวนเงิน"), so keeping it here caused
+# subtotal extraction to lock onto the header row instead of the real
+# totals-section line.
+SUBTOTAL_KEYWORDS = [
+    r"มูลค่าหลังส่วนลด", r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า",
+    r"รวมเป็นเงิน", r"รวมเงิน", r"Subtotal",
+]
 TOTAL_KEYWORDS = [
-    r"จำนวนเงินรวมทั้งสิ้น", r"รวมทั้งสิ้น", r"ยอดรวมสุทธิ", r"ยอดรวม",
+    r"จำนวนเงิน(?:รวม)?ทั้งสิ้น", r"รวมทั้งสิ้น", r"ยอดรวมสุทธิ", r"ยอดรวม",
     r"Grand\s*Total", r"Total\s*Amount", r"Total",
 ]
 BUYER_KEYWORDS = [r"นามผู้ซื้อ", r"ชื่อผู้ซื้อ", r"ลูกค้า", r"Customer", r"Bill\s*To"]
 TAXINV_MARKER = r"ใบกำกับภาษี"
 RECEIPT_MARKER = r"ใบเสร็จรับเงิน"
+
+# A line that is clearly part of the line-items table header (not a data
+# row, not a totals line) — used to keep totals/VAT extraction and
+# line-item parsing from misreading header text as a value.
+TABLE_HEADER_LINE_RE = re.compile(r"ลำดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย")
 
 NUM_RE = r"[-+]?\d[\d,]*(?:\.\d+)?"
 TAXID_RE = re.compile(r"(\d[\s-]?\d{4}[\s-]?\d{5}[\s-]?\d{2}[\s-]?\d)")
@@ -64,26 +77,54 @@ def _best_match_on_line(rest, value_pattern):
     """Pick the value on the rest-of-line after a keyword. For numeric
     patterns, Thai invoices usually print the actual amount at the end of
     the line (e.g. 'ภาษีมูลค่าเพิ่ม 7%   140.00'), so prefer the *last*
-    match and skip anything that looks like a percentage (N%)."""
+    match and skip anything that looks like a percentage (N%).
+
+    If EVERY number on the line looks like a percentage, treat that as "no
+    real value here" and return None — rather than falling back to
+    returning the percentage itself. Previously a line like
+    'ภาษีมูลค่าเพิ่ม 7%' (with the actual amount on a different line/column)
+    would incorrectly return "7" as the VAT amount and stop the search
+    before it ever reached the real number."""
     matches = list(re.finditer(value_pattern, rest))
     if not matches:
         return None
     if value_pattern is NUM_RE:
-        filtered = [mm for mm in matches if not rest[mm.end():mm.end() + 1].strip().startswith("%")]
-        candidates = filtered or matches
-        return candidates[-1].group(0).strip()
+        filtered = [mm for mm in matches if not rest[mm.end():mm.end() + 3].strip().startswith("%")]
+        if not filtered:
+            return None
+        return filtered[-1].group(0).strip()
     return matches[0].group(0).strip()
 
 
-def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=40):
-    """Find the value that appears shortly after one of the given keywords,
-    searching line by line first, then a window fallback."""
-    for line in text.splitlines():
+def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahead_lines=2, skip_header_lines=True):
+    """Find the value that appears shortly after one of the given keywords.
+
+    Searches line by line first. If the keyword's own line doesn't contain
+    a usable value, also checks the next couple of lines — OCR (especially
+    Google Vision on a boxed/tabular layout) sometimes puts a label and its
+    value on separate lines even though they're the same visual field.
+    Lines that look like the line-items table header are skipped so a
+    column header (e.g. 'ราคา/หน่วย') can't be mistaken for a totals field.
+    Falls back to a raw character-window search if nothing is found."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if skip_header_lines and TABLE_HEADER_LINE_RE.search(line):
+            continue
         for kw in keywords:
             m = re.search(kw, line, re.IGNORECASE)
-            if m:
-                rest = line[m.end():]
-                val = _best_match_on_line(rest, value_pattern)
+            if not m:
+                continue
+            rest = line[m.end():]
+            val = _best_match_on_line(rest, value_pattern)
+            if val:
+                return val
+            for j in range(1, lookahead_lines + 1):
+                if i + j >= len(lines):
+                    break
+                nxt = lines[i + j]
+                if skip_header_lines and TABLE_HEADER_LINE_RE.search(nxt):
+                    continue
+                val = _best_match_on_line(nxt, value_pattern)
                 if val:
                     return val
     # fallback: search whole text within a character window after the keyword
@@ -219,11 +260,30 @@ def build_review_reasons(fields):
     return reasons
 
 
-LINE_ITEM_RE = re.compile(
+# Full 8-column row, matching the common Thai tax-invoice table layout:
+#   ลำดับ  รหัสสินค้า  รายการ  จำนวน  หน่วย  ราคา/หน่วย  ส่วนลด  จำนวนเงิน
+#     1    001-001    ปากกาลูกลื่น (1*24)   1   กล่อง   135   0   135
+# Decimals are optional (many invoices print whole-baht line amounts with
+# no ".00"), which the previous version required and so silently dropped
+# every row on invoices like this.
+LINE_ITEM_FULL_RE = re.compile(
+    r"^\s*(?P<idx>\d{1,3})\s+"
+    r"(?P<code>[A-Za-zก-๙0-9][A-Za-zก-๙0-9\-]{1,15})\s+"
+    r"(?P<name>.+?)\s+"
+    r"(?P<qty>\d+(?:\.\d+)?)\s+"
+    r"(?P<unit>[ก-๙A-Za-z]+)\s+"
+    r"(?P<price>[\d,]+(?:\.\d+)?)\s+"
+    r"(?P<discount>[\d,]+(?:\.\d+)?)\s+"
+    r"(?P<amount>[\d,]+(?:\.\d+)?)\s*$"
+)
+
+# Simpler fallback for invoices with just 'description  qty  unit_price
+# amount' (no index/code/unit/discount columns).
+LINE_ITEM_SIMPLE_RE = re.compile(
     r"^(?P<desc>.{2,60}?)\s+"
-    r"(?P<qty>\d+(?:\.\d{1,2})?)\s+"
-    r"(?P<price>[\d,]+\.\d{2})\s+"
-    r"(?P<amount>[\d,]+\.\d{2})\s*$"
+    r"(?P<qty>\d+(?:\.\d+)?)\s+"
+    r"(?P<price>[\d,]+(?:\.\d+)?)\s+"
+    r"(?P<amount>[\d,]+(?:\.\d+)?)\s*$"
 )
 
 LINE_ITEM_SKIP_KEYWORDS = (
@@ -234,30 +294,39 @@ LINE_ITEM_SKIP_KEYWORDS = (
 
 def extract_line_items(text):
     """Best-effort extraction of a product/service table from OCR text.
-    Looks for lines shaped like 'description  qty  unit_price  amount'.
-    This is a heuristic (no table/column detection), so it works best on
-    invoices with a simple one-row-per-line item table and will miss
-    multi-line descriptions or unusual column layouts — always let the
-    user review/edit the result."""
+    Tries the full 8-column row shape first, then falls back to a simpler
+    'description qty price amount' shape. This is still a heuristic (no
+    real table/column detection), so it works best on invoices with a
+    one-row-per-line item table and will miss multi-line descriptions or
+    unusual column layouts — always let the user review/edit the result."""
     items = []
     for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
+        if TABLE_HEADER_LINE_RE.search(line):
+            continue  # table header row itself, not a data row
         if any(re.search(kw, line, re.IGNORECASE) for kw in LINE_ITEM_SKIP_KEYWORDS):
             continue
-        m = LINE_ITEM_RE.match(line)
-        if not m:
+
+        m = LINE_ITEM_FULL_RE.match(line)
+        if m:
+            items.append({
+                "description": m.group("name").strip(),
+                "qty": _clean_number(m.group("qty")),
+                "unit_price": _clean_number(m.group("price")),
+                "amount": _clean_number(m.group("amount")),
+            })
             continue
-        qty = _clean_number(m.group("qty"))
-        price = _clean_number(m.group("price"))
-        amount = _clean_number(m.group("amount"))
-        items.append({
-            "description": m.group("desc").strip(),
-            "qty": qty,
-            "unit_price": price,
-            "amount": amount,
-        })
+
+        m = LINE_ITEM_SIMPLE_RE.match(line)
+        if m:
+            items.append({
+                "description": m.group("desc").strip(),
+                "qty": _clean_number(m.group("qty")),
+                "unit_price": _clean_number(m.group("price")),
+                "amount": _clean_number(m.group("amount")),
+            })
     return items
 
 
