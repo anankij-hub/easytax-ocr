@@ -124,6 +124,114 @@ GRAND TOTAL AMOUNT
 """
 
 
+# The ACTUAL raw OCR text a user pasted from the live app's "ดูข้อความ OCR
+# ดิบ" viewer for the Moshi Moshi invoice (see BILINGUAL_INVOICE_TEXT above
+# for context) — this is ground truth, not a guess, and is what finally
+# revealed the real bugs:
+#   - Every ำ in the OCR output is the decomposed NIKHAHIT+SARA-AA sequence
+#     instead of the precomposed character, silently breaking every
+#     keyword containing it ("จำนวน", "กำกับ", "จำกัด", ...).
+#   - The document-info box (เลขที่เอกสาร / SI1412508004, etc.) is OCR'd as
+#     ~10 label lines followed by the value lines — far past a 2-line
+#     lookahead.
+#   - The Thai buyer-name label got OCR'd as garbage ("ผู้ซี้ด"), and the
+#     "Buyer Name" English sub-label ended up AFTER the value instead of
+#     before it.
+# Constructed with normal (precomposed) ำ below, then converted to the
+# decomposed form the same way the real OCR output has it, so this test
+# actually exercises normalize_thai_text().
+REAL_MOSHI_RAW_TEXT = """Moshi
+Moshi
+BLBL
+บริษัท โมชิ โมชิ รีเทล คอร์ปอเรชั่น จำกัด (มหาชน)
+เลขที่ 19 อาคาร โลตัส สาขาคำเที่ยง ถนนตลาดคำเที่ยง ตำบลป่าตัน อำเภอเมืองเชียงใหม่
+จังหวัดเชียงใหม่ 50300
+เลขประจำตัวผู้เสียภาษี : 0107565000387 สาขาที่ 00141
+Digtaly pred by u เลย คอร์ปอเรชั่น จำกัด (มหาชน)
+Crit core L L โดย คอร์ปอเรชั่น จำกัด (มหาชน)
+ใบเสร็จรับเงิน/ใบกำกับภาษี
+RECEIPT/TAX INVOICE
+ผู้ซี้ด
+คณะบริหารธุรกิจ มหาวิทยาลัยเชียงใหม่
+Buyer Name
+สาขา
+Buyer Branch ID.
+รหัสผู้ซื้อ
+ที่อยู่
+Buyer Address
+239 ถ.ห้วยแก้ว สุเทพ เมือง เชียงใหม่ 50200
+เลขประจำตัวผู้เสียภาษี
+Buyer Tax ID.
+0994000423179
+สาขาที่ 00141
+Buyer ID.
+ลำดับ
+NO.
+1
+รหัสสินค้า
+PRODUCT CODE
+ผู้ติดต่อ
+รายการสินค้า/บริการ
+DESCRIPTION
+000000007100012598 ถุงหิ้ว size 18x36 นิ้ว
+เบอร์โทรศัพท์ 053-942105
+Buyer Contact Phone No.
+เลขที่เอกสาร
+Document No.
+วันที่เอกสาร
+Document Date
+เลขที่เอกสารอ้างอิง
+Document Ref.
+วันที่เอกสารอ้างอิง
+Date of Ref.
+เลขที่ใบสั่งซื้อ
+Purchase Order No.
+SI1412508004
+02/08/2025
+000B141002000000272
+02/08/2025
+จำนวน
+QUANTITY
+ราคาต่อหน่วย
+ส่วนลด
+จำนวนเงินรวม
+UNIT PRICE
+ITEM DISCOUNT
+TOTAL AMOUNT
+1.00 EA
+2.00
+0.00
+2.00
+ชำระโดย
+Paid by
+วันครบกำหนดชำระเงิน
+Payment Due Date
+เครดิตเทอม
+Payment Term
+หมายเหตุ
+Remark
+*** เป็นการยกเลิกใบกำกับภาษีอย่างย่อเลขที่ 000B14100200000027202/08/2025 และออกใบกำกับภาษีอิเล็กทรอนิกส์ใหม่แทน ***
+จำนวนเงิน
+SUB TOTAL
+ส่วนลดท้ายบิล
+BILL DISCOUNT
+จำนวนเงินหลังหักส่วนลด
+AFTER DISCOINT
+ภาษีมูลค่าเพิ่ม 7%
+VAT 7%
+จำนวนเงินรวมสุทธิ
+2,812.00
+2.00
+2,626.17
+183.83
+2,810.00
+GRAND TOTAL AMOUNT
+"""
+# Convert every precomposed ำ (U+0E33) above into the decomposed
+# NIKHAHIT+SARA-AA sequence (U+0E4D U+0E32), matching the real OCR output.
+REAL_MOSHI_RAW_TEXT = REAL_MOSHI_RAW_TEXT.replace("ำ", "ํา")
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -193,6 +301,29 @@ def main():
     all_ok &= check("bilingual: subtotal = 2626.17 (post-discount)", fields4["subtotal"] == 2626.17)
     all_ok &= check("bilingual: vat = 183.83 (not 2812)", fields4["vat"] == 183.83)
     all_ok &= check("bilingual: total = 2810.0 (not 1)", fields4["total"] == 2810.0)
+
+    # regression: the ACTUAL raw OCR text from the live app for the Moshi
+    # Moshi invoice (see comment on REAL_MOSHI_RAW_TEXT) — ground truth,
+    # not a guess
+    fields5 = extractor.extract_fields(REAL_MOSHI_RAW_TEXT, ocr_confidence=85.0)
+    print("\n--- Real Moshi Moshi OCR text fields ---")
+    for k, v in fields5.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real moshi: seller_name is the registered company name",
+        fields5["seller_name"] == "บริษัท โมชิ โมชิ รีเทล คอร์ปอเรชั่น จำกัด (มหาชน)",
+    )
+    all_ok &= check(
+        "real moshi: invoice_no = SI1412508004 (not '50300' postal code)",
+        fields5["invoice_no"] == "SI1412508004",
+    )
+    all_ok &= check(
+        "real moshi: buyer_name extracted (not 'สาขา')",
+        fields5["buyer_name"] == "คณะบริหารธุรกิจ มหาวิทยาลัยเชียงใหม่",
+    )
+    all_ok &= check("real moshi: subtotal = 2626.17 (post-discount)", fields5["subtotal"] == 2626.17)
+    all_ok &= check("real moshi: vat = 183.83 (not 2812)", fields5["vat"] == 183.83)
+    all_ok &= check("real moshi: total = 2810.0 (not 1)", fields5["total"] == 2810.0)
 
     # multi-invoice split
     combined = FULL_INVOICE_TEXT + "\n" + FULL_INVOICE_TEXT

@@ -15,6 +15,25 @@ import datetime
 
 THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
 
+
+def normalize_thai_text(text):
+    """Some OCR engines (confirmed on Google Vision output from a real
+    invoice) emit Thai SARA AM (ำ, U+0E33) as its decomposed two-character
+    sequence NIKHAHIT + SARA AA (ํ + า, U+0E4D U+0E32) instead of the single
+    precomposed character. The two render identically, but Unicode NFC
+    normalization does NOT merge them back (Thai script has no canonical
+    decomposition mapping for ำ), so every keyword containing it —
+    "จำนวน" (amount), "กำกับ" (as in ใบกำกับภาษี), "จำกัด" (Co., Ltd.), etc. —
+    silently fails to match against such OCR output. Collapse the
+    decomposed form back to ำ before any other processing; this is safe
+    and a no-op on text that already uses the precomposed form."""
+    if not text:
+        return text
+    # Explicit codepoints (not literal Thai characters typed in source) so
+    # this is unambiguous no matter how this file itself gets
+    # encoded/normalized: ํ NIKHAHIT + า SARA AA -> ำ SARA AM
+    return text.replace("ํา", "ำ")
+
 THAI_MONTHS = {
     "มกราคม": 1, "ม.ค.": 1, "ม.ค": 1,
     "กุมภาพันธ์": 2, "ก.พ.": 2, "ก.พ": 2,
@@ -52,15 +71,33 @@ TOTAL_KEYWORDS = [
     r"Grand\s*Total", r"Total\s*Amount", r"Total",
 ]
 BUYER_KEYWORDS = [
-    r"นามผู้ซื้อ", r"ชื่อผู้ซื้อ", r"ลูกค้า", r"Customer", r"Bill\s*To", r"Buyer\s*Name",
+    r"นามผู้ซื้อ", r"ชื่อผู้ซื้อ", r"ลูกค้า", r"Customer", r"Bill\s*To",
 ]
+# NOTE: "Buyer Name" is intentionally NOT in this forward-search list — on
+# a real invoice it was OCR'd sitting AFTER the buyer name value instead of
+# before it, so searching forward from it grabbed unrelated text below.
+# extract_buyer_name() handles that specific case separately by checking
+# the line *before* "Buyer Name" first.
 TAXINV_MARKER = r"ใบกำกับภาษี"
 RECEIPT_MARKER = r"ใบเสร็จรับเงิน"
 
 # A line that is clearly part of the line-items table header (not a data
-# row, not a totals line) — used to keep totals/VAT extraction and
-# line-item parsing from misreading header text as a value.
-TABLE_HEADER_LINE_RE = re.compile(r"ลำดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย")
+# row, not a totals line) — used to keep totals/VAT extraction from
+# misreading header text as a value. Confirmed on a real invoice: a
+# bilingual item table can have a SECOND header row further down
+# ("จำนวนเงินรวม" / "TOTAL AMOUNT", "ITEM DISCOUNT", "QUANTITY", "UNIT
+# PRICE"...) whose column names ("total", "discount", "amount") happen to
+# match the same generic keywords used for the invoice's real totals
+# section — without recognizing these as header text too, the totals-block
+# scanner can lock onto this row plus the first line item's numbers and
+# return a completely wrong (but internally consistent) result.
+TABLE_HEADER_LINE_RE = re.compile(
+    # (?!สุทธิ) so this doesn't collide with the real grand-total label
+    # "จำนวนเงินรวมสุทธิ", which legitimately starts with the same prefix.
+    r"ลำดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย|ราคาต่อหน่วย|รายการสินค้า|จำนวนเงินรวม(?!สุทธิ)|"
+    r"PRODUCT\s*CODE|DESCRIPTION|QUANTITY|UNIT\s*PRICE|ITEM\s*DISCOUNT|TOTAL\s*AMOUNT",
+    re.IGNORECASE,
+)
 
 # Bilingual invoices often print a field as THREE lines: a Thai label, an
 # English sub-label right under it, then the actual value on the next line
@@ -292,7 +329,32 @@ def extract_seller_name(text):
     return None
 
 
+def _looks_like_value_line(line):
+    line = line.strip()
+    return bool(line) and line.lower() not in _LOOKAHEAD_LABEL_BLOCKLIST and len(line) >= 3
+
+
 def extract_buyer_name(text):
+    lines = text.splitlines()
+    # Reversed-order case, confirmed on a real bilingual invoice: OCR
+    # printed the buyer name value BEFORE its "Buyer Name" English
+    # sub-label (with the Thai label above the value garbled beyond
+    # recognition), instead of label-then-value like every other field.
+    # If "Buyer Name" is found, check the line right above it first — if
+    # it looks like real Thai text (not a label/blocklist word), it's the
+    # value, regardless of what comes after.
+    for i, line in enumerate(lines):
+        if line.strip().lower() == "buyer name" and i > 0:
+            prev = lines[i - 1].strip()
+            # Only treat the previous line as the value if it isn't itself
+            # a recognizable label (e.g. "ชื่อผู้ซื้อ") — that would mean
+            # this document actually uses the normal label-then-value
+            # order and "Buyer Name" is just the English half of the
+            # label pair, not a value marker to look backward from.
+            prev_is_label = any(re.search(kw, prev, re.IGNORECASE) for kw in BUYER_KEYWORDS)
+            if not prev_is_label and _looks_like_value_line(prev) and re.search(r"[ก-๙]", prev):
+                return prev
+
     val = _find_after_keyword(text, BUYER_KEYWORDS, value_pattern=r"[^\n]{3,60}")
     if not val:
         return None
@@ -384,19 +446,31 @@ def _extract_totals_block(text):
     may independently match the same key's patterns. Two consecutive lines
     that classify to the *same* key are collapsed into a single label so
     they still count as one field, keeping the label count aligned with
-    the value count."""
+    the value count.
+
+    Real OCR output isn't perfectly clean — a confirmed real example had
+    an English sub-label OCR'd with a typo ("AFTER DISCOINT" instead of
+    "AFTER DISCOUNT"). A single unrecognized line like that shouldn't kill
+    the whole label run, so up to 2 consecutive unclassifiable lines are
+    skipped rather than treated as the end of the run; more than that and
+    we've probably wandered into unrelated content, so the run stops."""
     lines = [l.strip() for l in text.splitlines()]
     n = len(lines)
     for start in range(n):
         labels = []
         j = start
+        unclassified_streak = 0
         while (j < n and lines[j] and not PURE_NUMBER_LINE_RE.match(lines[j])
                and not TABLE_HEADER_LINE_RE.search(lines[j])):
             key = _classify_totals_label(lines[j])
-            if key is None:
-                break
-            if not labels or labels[-1] != key:
-                labels.append(key)
+            if key is not None:
+                if not labels or labels[-1] != key:
+                    labels.append(key)
+                unclassified_streak = 0
+            else:
+                unclassified_streak += 1
+                if unclassified_streak > 2:
+                    break
             j += 1
         if len(labels) < 2:
             continue
@@ -415,14 +489,88 @@ def _extract_totals_block(text):
     return {}
 
 
+# Some invoices' document-info box (เลขที่เอกสาร/วันที่เอกสาร/เลขที่เอกสารอ้างอิง/
+# วันที่เอกสารอ้างอิง/เลขที่ใบสั่งซื้อ) gets OCR'd the same column-major way as
+# the totals box: ALL the label lines (Thai+English pairs) first, then ALL
+# the value lines after — and confirmed on a real invoice, this run can be
+# up to 10 label lines before the first value, far past a small lookahead.
+# Unlike the totals box, a trailing field is often blank (no printed value
+# at all, e.g. an empty Purchase Order No.), so the value run can be
+# SHORTER than the label run — pair up to the shorter length instead of
+# requiring an exact match.
+_DOC_INFO_BLOCK_KEYS = [
+    ("doc_no", [r"เลขที่เอกสาร(?!อ้างอิง)", r"Document\s*No"]),
+    ("doc_date", [r"วันที่เอกสาร(?!อ้างอิง)", r"Document\s*Date"]),
+    ("doc_ref_no", [r"เลขที่เอกสารอ้างอิง", r"Document\s*Ref"]),
+    ("doc_ref_date", [r"วันที่เอกสารอ้างอิง", r"Date\s*of\s*Ref"]),
+    ("po_no", [r"เลขที่ใบสั่งซื้อ", r"Purchase\s*Order\s*No"]),
+]
+
+# A "value" line here is a single alphanumeric token with no spaces (a doc
+# number, a reference number, or a dd/mm/yyyy date) — deliberately narrower
+# than PURE_NUMBER_LINE_RE since these values aren't always pure digits.
+DOC_VALUE_LINE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-/.]*$")
+
+
+def _classify_doc_info_label(line):
+    for key, patterns in _DOC_INFO_BLOCK_KEYS:
+        for pat in patterns:
+            if re.search(pat, line, re.IGNORECASE):
+                return key
+    return None
+
+
+def _extract_doc_info_block(text):
+    """Same idea as _extract_totals_block but for the document-info box —
+    see the comment above _DOC_INFO_BLOCK_KEYS. Returns raw string values
+    keyed by "doc_no"/"doc_date"/"doc_ref_no"/"doc_ref_date"/"po_no", or {}
+    if the text doesn't have this shape."""
+    lines = [l.strip() for l in text.splitlines()]
+    n = len(lines)
+    for start in range(n):
+        labels = []
+        j = start
+        unclassified_streak = 0
+        # Stop as soon as we reach a value-shaped line — that's the real
+        # transition from labels to values. Tolerating it as just another
+        # "unclassified" skip (like a stray typo) would eat into the front
+        # of the value run and shift every label/value pairing off by one.
+        while j < n and lines[j] and not DOC_VALUE_LINE_RE.match(lines[j]):
+            key = _classify_doc_info_label(lines[j])
+            if key is not None:
+                if not labels or labels[-1] != key:
+                    labels.append(key)
+                unclassified_streak = 0
+            else:
+                unclassified_streak += 1
+                if unclassified_streak > 2:
+                    break
+            j += 1
+        if len(labels) < 2:
+            continue
+        values = []
+        k = j
+        while k < n and lines[k] and DOC_VALUE_LINE_RE.match(lines[k]):
+            values.append(lines[k])
+            k += 1
+        if not values:
+            continue
+        return dict(zip(labels, values))  # zip stops at the shorter list,
+        # so a blank trailing field (fewer values than labels) just isn't
+        # included in the result rather than causing a mismatch
+    return {}
+
+
 def extract_fields(text, ocr_confidence=None):
     """Main entry point: raw OCR text -> structured dict."""
-    text = text or ""
-    invoice_no = extract_invoice_no(text)
+    text = normalize_thai_text(text or "")
     date_raw, date_iso = extract_date(text)
     seller_tax_id = extract_tax_id(text)
     seller_name = extract_seller_name(text)
     buyer_name = extract_buyer_name(text)
+
+    doc_info_block = _extract_doc_info_block(text)
+    invoice_no = doc_info_block.get("doc_no") or extract_invoice_no(text)
 
     totals_block = _extract_totals_block(text)
     subtotal = (_clean_number(totals_block["subtotal"]) if "subtotal" in totals_block
@@ -470,6 +618,7 @@ def split_multi_invoice_text(text):
     text (field labels like 'เลขที่ใบกำกับภาษี' also contain that word and
     must NOT trigger a split). Still just a heuristic — no real layout
     understanding — so always let the user review the result."""
+    text = normalize_thai_text(text or "")
     lines = text.splitlines(keepends=True)
     offsets = []
     pos = 0
