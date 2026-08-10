@@ -295,16 +295,35 @@ def extract_fields(text, ocr_confidence=None):
     return fields
 
 
+# A document-title line looks like "ใบกำกับภาษี", "ใบกำกับภาษี/ใบเสร็จรับเงิน
+# (ต้นฉบับ)", "สำเนาใบกำกับภาษี" etc — i.e. the *whole line* is essentially
+# just the title. This deliberately does NOT match field-label lines like
+# "เลขที่ใบกำกับภาษี: IV123" or "วันที่ใบกำกับภาษี 07/12/2025", which contain
+# the same marker word but are part of a data field, not a new document.
+DOC_TITLE_LINE_RE = re.compile(
+    r"^\s*(?:ต้นฉบับ\s*)?(?:สำเนา\s*)?ใบกำกับภาษี\s*(?:/\s*ใบเสร็จรับเงิน)?\s*(?:\([^)]{0,20}\))?\s*$"
+)
+
+
 def split_multi_invoice_text(text):
-    """Very simple heuristic splitter for a single OCR text blob (e.g. one
-    scanned page/PDF) that may contain more than one 'ใบกำกับภาษี' document.
-    Splits at each occurrence of the marker keyword. This is far less
-    reliable than an LLM-based split and should be reviewed by a human."""
-    positions = [m.start() for m in re.finditer(TAXINV_MARKER, text)]
-    if len(positions) <= 1:
+    """Heuristic splitter for a single OCR text blob (e.g. one scanned page
+    or PDF) that may contain more than one 'ใบกำกับภาษี' document laid out
+    on the same page. Splits only at lines that are themselves a document
+    title, not every occurrence of the word 'ใบกำกับภาษี' anywhere in the
+    text (field labels like 'เลขที่ใบกำกับภาษี' also contain that word and
+    must NOT trigger a split). Still just a heuristic — no real layout
+    understanding — so always let the user review the result."""
+    lines = text.splitlines(keepends=True)
+    offsets = []
+    pos = 0
+    for line in lines:
+        if DOC_TITLE_LINE_RE.match(line.strip()):
+            offsets.append(pos)
+        pos += len(line)
+    if len(offsets) <= 1:
         return [text]
     chunks = []
-    for i, start in enumerate(positions):
-        end = positions[i + 1] if i + 1 < len(positions) else len(text)
+    for i, start in enumerate(offsets):
+        end = offsets[i + 1] if i + 1 < len(offsets) else len(text)
         chunks.append(text[start:end])
     return chunks
