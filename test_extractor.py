@@ -75,6 +75,55 @@ REAL_VENDOR_INVOICE_TEXT = """บริษัท รจนา จำกัด (�
 """
 
 
+# Mirrors a second real invoice reported by a user: a bilingual Thai/English
+# receipt/tax-invoice where every field is printed as THREE lines (Thai
+# label, English sub-label, then the value on its own line below) rather
+# than "label value" on one line, plus a logo wordmark ("Moshi Moshi")
+# printed above the real registered company name. The old extractor
+# mis-parsed this as seller_name="Moshi", invoice_no="Document" (grabbed
+# the English label word), buyer_name=empty, and subtotal/VAT/total all
+# wrong.
+BILINGUAL_INVOICE_TEXT = """Moshi
+Moshi
+บริษัท โมชิ โมชิ รีเทล คอร์ปอเรชั่น จำกัด (มหาชน)
+เลขที่ 19 อาคารโลตัส สาขาคำเที่ยง ถนนมหาดค์เที่ยง ตำบลป่าตัน อำเภอเมืองเชียงใหม่
+จังหวัดเชียงใหม่ 50300
+เลขประจำตัวผู้เสียภาษี : 0107565000387 สาขาที่ 00141
+ใบเสร็จรับเงิน/ใบกำกับภาษี
+RECEIPT/TAX INVOICE
+ชื่อผู้ซื้อ
+Buyer Name
+คณะบริหารธุรกิจ มหาวิทยาลัยเชียงใหม่
+ที่อยู่
+Buyer Address
+239 ถ.ห้วยแก้ว สุเทพ เมือง เชียงใหม่ 50200
+เลขประจำตัวผู้เสียภาษี
+Buyer Tax ID
+0994000423179
+เลขที่เอกสาร
+Document No.
+SI1412508004
+วันที่เอกสาร
+Document Date
+02/08/2025
+จำนวนเงิน
+SUB TOTAL
+2,812.00
+ส่วนลดท้ายบิล
+BILL DISCOUNT
+2.00
+จำนวนเงินหลังหักส่วนลด
+AFTER DISCOUNT
+2,626.17
+ภาษีมูลค่าเพิ่ม 7%
+VAT 7%
+183.83
+จำนวนเงินรวมสุทธิ
+GRAND TOTAL AMOUNT
+2,810.00
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -121,6 +170,29 @@ def main():
     all_ok &= check("real invoice: subtotal = 4434.58", fields3["subtotal"] == 4434.58)
     all_ok &= check("real invoice: vat = 310.42 (not 4434.58)", fields3["vat"] == 310.42)
     all_ok &= check("real invoice: total = 4745.0 (not 4434.58)", fields3["total"] == 4745.0)
+
+    # regression: bilingual 3-line-per-field invoice with a logo wordmark
+    # above the real company name (see comment on BILINGUAL_INVOICE_TEXT)
+    fields4 = extractor.extract_fields(BILINGUAL_INVOICE_TEXT, ocr_confidence=85.0)
+    print("\n--- Bilingual invoice fields ---")
+    for k, v in fields4.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "bilingual: seller_name is the registered company name (not 'Moshi')",
+        fields4["seller_name"] == "บริษัท โมชิ โมชิ รีเทล คอร์ปอเรชั่น จำกัด (มหาชน)",
+    )
+    all_ok &= check(
+        "bilingual: invoice_no = SI1412508004 (not 'Document')",
+        fields4["invoice_no"] == "SI1412508004",
+    )
+    all_ok &= check(
+        "bilingual: buyer_name extracted (not empty)",
+        fields4["buyer_name"] == "คณะบริหารธุรกิจ มหาวิทยาลัยเชียงใหม่",
+    )
+    all_ok &= check("bilingual: invoice_date_iso = 2025-08-02 (not truncated)", fields4["invoice_date_iso"] == "2025-08-02")
+    all_ok &= check("bilingual: subtotal = 2626.17 (post-discount)", fields4["subtotal"] == 2626.17)
+    all_ok &= check("bilingual: vat = 183.83 (not 2812)", fields4["vat"] == 183.83)
+    all_ok &= check("bilingual: total = 2810.0 (not 1)", fields4["total"] == 2810.0)
 
     # multi-invoice split
     combined = FULL_INVOICE_TEXT + "\n" + FULL_INVOICE_TEXT

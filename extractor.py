@@ -32,24 +32,28 @@ THAI_MONTHS = {
 
 INVOICE_NO_KEYWORDS = [
     r"เลขที่ใบกำกับภาษี", r"เลขที่เอกสาร", r"เลขที่ใบเสร็จ", r"เลขที่",
-    r"Invoice\s*No\.?", r"Tax\s*Invoice\s*No\.?", r"No\.",
+    r"Invoice\s*No\.?", r"Tax\s*Invoice\s*No\.?", r"Document\s*No\.?", r"No\.",
 ]
 DATE_KEYWORDS = [r"วันที่", r"Date"]
 VAT_KEYWORDS = [r"ภาษีมูลค่าเพิ่ม", r"VAT", r"Vat"]
-# Most specific / least ambiguous first. Deliberately does NOT include the
-# bare word "จำนวนเงิน" — that phrase is also the line-items table's column
-# header ("...ราคา/หน่วย  ส่วนลด  จำนวนเงิน"), so keeping it here caused
-# subtotal extraction to lock onto the header row instead of the real
-# totals-section line.
+# Most specific / least ambiguous first. "จำนวนเงิน" (bare, no suffix) is
+# deliberately last/lowest-priority — it's also part of the line-items
+# table's column header wording on some invoices ("...ราคา/หน่วย ส่วนลด
+# จำนวนเงินรวม"), so more specific labels should win when present. It's
+# still needed because some receipts literally label the pre-tax subtotal
+# just "จำนวนเงิน" / "SUB TOTAL".
 SUBTOTAL_KEYWORDS = [
-    r"มูลค่าหลังส่วนลด", r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า",
-    r"รวมเป็นเงิน", r"รวมเงิน", r"Subtotal",
+    r"มูลค่าหลังส่วนลด", r"จำนวนเงินหลังหักส่วนลด", r"หลังหักส่วนลด",
+    r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า",
+    r"รวมเป็นเงิน", r"รวมเงิน", r"After\s*Discount", r"Sub\s*Total", r"จำนวนเงิน",
 ]
 TOTAL_KEYWORDS = [
-    r"จำนวนเงิน(?:รวม)?ทั้งสิ้น", r"รวมทั้งสิ้น", r"ยอดรวมสุทธิ", r"ยอดรวม",
+    r"จำนวนเงิน(?:รวม)?ทั้งสิ้น", r"จำนวนเงินรวมสุทธิ", r"รวมทั้งสิ้น", r"ยอดรวมสุทธิ", r"ยอดรวม",
     r"Grand\s*Total", r"Total\s*Amount", r"Total",
 ]
-BUYER_KEYWORDS = [r"นามผู้ซื้อ", r"ชื่อผู้ซื้อ", r"ลูกค้า", r"Customer", r"Bill\s*To"]
+BUYER_KEYWORDS = [
+    r"นามผู้ซื้อ", r"ชื่อผู้ซื้อ", r"ลูกค้า", r"Customer", r"Bill\s*To", r"Buyer\s*Name",
+]
 TAXINV_MARKER = r"ใบกำกับภาษี"
 RECEIPT_MARKER = r"ใบเสร็จรับเงิน"
 
@@ -57,6 +61,22 @@ RECEIPT_MARKER = r"ใบเสร็จรับเงิน"
 # row, not a totals line) — used to keep totals/VAT extraction and
 # line-item parsing from misreading header text as a value.
 TABLE_HEADER_LINE_RE = re.compile(r"ลำดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย")
+
+# Bilingual invoices often print a field as THREE lines: a Thai label, an
+# English sub-label right under it, then the actual value on the next line
+# (e.g. "ชื่อผู้ซื้อ" / "Buyer Name" / "คณะบริหารธุรกิจ..."). When a keyword
+# search's same-line lookup comes up empty and falls back to scanning the
+# next couple of lines, it needs to skip over that English sub-label line
+# instead of grabbing it as if it were the value — otherwise fields end up
+# populated with literal label text like "Document No." or "Buyer Name".
+_LOOKAHEAD_LABEL_BLOCKLIST = {
+    "buyer name", "buyer address", "buyer tax id", "buyer branch id",
+    "buyer contact person", "buyer contact phone no", "document no",
+    "document date", "document ref", "date of ref", "purchase order no",
+    "sub total", "bill discount", "after discount", "grand total amount",
+    "invoice no", "tax invoice no", "customer", "bill to", "date", "address",
+    "no", "name", "phone no", "seller name", "seller address", "vat 7%",
+}
 
 NUM_RE = r"[-+]?\d[\d,]*(?:\.\d+)?"
 TAXID_RE = re.compile(r"(\d[\s-]?\d{4}[\s-]?\d{5}[\s-]?\d{2}[\s-]?\d)")
@@ -73,7 +93,7 @@ def _clean_number(s):
         return None
 
 
-def _best_match_on_line(rest, value_pattern):
+def _best_match_on_line(rest, value_pattern, require_digit=False):
     """Pick the value on the rest-of-line after a keyword. For numeric
     patterns, Thai invoices usually print the actual amount at the end of
     the line (e.g. 'ภาษีมูลค่าเพิ่ม 7%   140.00'), so prefer the *last*
@@ -84,7 +104,13 @@ def _best_match_on_line(rest, value_pattern):
     returning the percentage itself. Previously a line like
     'ภาษีมูลค่าเพิ่ม 7%' (with the actual amount on a different line/column)
     would incorrectly return "7" as the VAT amount and stop the search
-    before it ever reached the real number."""
+    before it ever reached the real number.
+
+    require_digit=True additionally rejects a match that contains no digits
+    at all — used for document/invoice numbers, which always contain at
+    least one digit, so a plain English word like "Document" (picked up
+    from a bilingual label's English line) can't be mistaken for the
+    value."""
     matches = list(re.finditer(value_pattern, rest))
     if not matches:
         return None
@@ -93,10 +119,15 @@ def _best_match_on_line(rest, value_pattern):
         if not filtered:
             return None
         return filtered[-1].group(0).strip()
+    if require_digit:
+        matches = [mm for mm in matches if re.search(r"\d", mm.group(0))]
+        if not matches:
+            return None
     return matches[0].group(0).strip()
 
 
-def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahead_lines=2, skip_header_lines=True):
+def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahead_lines=2,
+                         skip_header_lines=True, require_digit=False):
     """Find the value that appears shortly after one of the given keywords.
 
     Keywords are tried in priority order: every occurrence of the FIRST
@@ -114,9 +145,10 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
     back to the next couple of lines (OCR — especially Google Vision on a
     boxed/tabular layout — sometimes puts a label and its value on
     separate lines even though they're the same visual field). Lines that
-    look like the line-items table header are skipped so a column header
-    (e.g. 'ราคา/หน่วย') can't be mistaken for a totals field. Falls back to
-    a raw character-window search if nothing is found."""
+    look like the line-items table header, or a known bilingual English
+    sub-label (see _LOOKAHEAD_LABEL_BLOCKLIST), are skipped during that
+    lookahead so a label word can't be mistaken for the actual value.
+    Falls back to a raw character-window search if nothing is found."""
     lines = text.splitlines()
     for kw in keywords:
         for i, line in enumerate(lines):
@@ -126,7 +158,7 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
             if not m:
                 continue
             rest = line[m.end():]
-            val = _best_match_on_line(rest, value_pattern)
+            val = _best_match_on_line(rest, value_pattern, require_digit=require_digit)
             if val:
                 return val
             for j in range(1, lookahead_lines + 1):
@@ -135,14 +167,16 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
                 nxt = lines[i + j]
                 if skip_header_lines and TABLE_HEADER_LINE_RE.search(nxt):
                     continue
-                val = _best_match_on_line(nxt, value_pattern)
+                if nxt.strip().lower().rstrip(".") in _LOOKAHEAD_LABEL_BLOCKLIST:
+                    continue
+                val = _best_match_on_line(nxt, value_pattern, require_digit=require_digit)
                 if val:
                     return val
     # fallback: search whole text within a character window after the keyword
     for kw in keywords:
         for m in re.finditer(kw, text, re.IGNORECASE):
             window_text = text[m.end():m.end() + window]
-            val = _best_match_on_line(window_text, value_pattern)
+            val = _best_match_on_line(window_text, value_pattern, require_digit=require_digit)
             if val:
                 return val
     return None
@@ -171,7 +205,9 @@ def extract_tax_id(text):
 
 
 def extract_invoice_no(text):
-    val = _find_after_keyword(text, INVOICE_NO_KEYWORDS, value_pattern=r"[A-Za-z0-9\-/]{3,}")
+    val = _find_after_keyword(
+        text, INVOICE_NO_KEYWORDS, value_pattern=r"[A-Za-z0-9\-/]{3,}", require_digit=True
+    )
     return val
 
 
@@ -208,7 +244,10 @@ def _parse_thai_date(raw):
 def extract_date(text):
     for kw in DATE_KEYWORDS:
         for m in re.finditer(kw, text):
-            window_text = text[m.end():m.end() + 30]
+            # Window needs to be wide enough to skip past an intervening
+            # bilingual English sub-label (e.g. "วันที่เอกสาร\nDocument
+            # Date\n02/08/2025") without truncating the date itself.
+            window_text = text[m.end():m.end() + 60]
             dm = re.search(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}", window_text)
             if dm:
                 iso = _parse_thai_date(dm.group(0))
@@ -225,8 +264,24 @@ def extract_date(text):
     return None, None
 
 
+COMPANY_NAME_HINT_RE = re.compile(r"บริษัท|ห้างหุ้นส่วน|จำกัด|มหาชน|Co\.,?\s*Ltd|Company")
+
+
 def extract_seller_name(text):
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+    # Prefer a line that actually looks like a registered company name —
+    # some invoices print a short logo/brand word (e.g. "Moshi Moshi") as
+    # its own line above the real registered name ("บริษัท โมชิ โมชิ รีเทล
+    # คอร์ปอเรชั่น จำกัด (มหาชน)"), and a plain "first short line" heuristic
+    # grabs the logo text instead of the real name.
+    for line in lines[:8]:
+        if re.search(TAXINV_MARKER, line) or re.search(RECEIPT_MARKER, line):
+            continue
+        if re.search(r"\d{10,}", line):
+            continue
+        if len(line) >= 5 and COMPANY_NAME_HINT_RE.search(line):
+            return line
+    # fallback: first short-ish non-marker line
     for line in lines[:6]:
         if re.search(TAXINV_MARKER, line) or re.search(RECEIPT_MARKER, line):
             continue
@@ -286,12 +341,20 @@ def build_review_reasons(fields):
 # often the WRONG number (and can make subtotal/VAT/total all resolve to
 # the same figure — the first value in the value run). This block detects
 # that shape and pairs the Nth label with the Nth value instead.
+#
+# The bare word "จำนวนเงิน" (in SUBTOTAL_KEYWORDS) is deliberately excluded
+# from this primary list and checked only as a last-resort fallback (see
+# _classify_totals_label) — it's a substring of several TOTAL labels too
+# ("จำนวนเงินทั้งสิ้น", "จำนวนเงินรวมสุทธิ"), so checking it at the same
+# priority as everything else would misclassify a real total line as a
+# subtotal just because "จำนวนเงิน" happens to also be a prefix of it.
 _TOTALS_BLOCK_KEYS = [
-    ("subtotal", SUBTOTAL_KEYWORDS),
+    ("subtotal", [kw for kw in SUBTOTAL_KEYWORDS if kw != r"จำนวนเงิน"]),
     ("discount", [r"ส่วนลด", r"Discount"]),
     ("vat", VAT_KEYWORDS),
     ("total", TOTAL_KEYWORDS),
 ]
+_TOTALS_BLOCK_FALLBACK_KEY = ("subtotal", [r"จำนวนเงิน"])
 
 PURE_NUMBER_LINE_RE = re.compile(r"^[-+]?\d[\d,]*(?:\.\d+)?\s*%?$")
 
@@ -301,6 +364,10 @@ def _classify_totals_label(line):
         for pat in patterns:
             if re.search(pat, line, re.IGNORECASE):
                 return key
+    fallback_key, fallback_patterns = _TOTALS_BLOCK_FALLBACK_KEY
+    for pat in fallback_patterns:
+        if re.search(pat, line, re.IGNORECASE):
+            return fallback_key
     return None
 
 
@@ -310,7 +377,14 @@ def _extract_totals_block(text):
     and pair them up by position. Returns raw string values keyed by
     "subtotal"/"discount"/"vat"/"total" (only for keys actually found), or
     {} if the text doesn't have this shape — callers should fall back to
-    _find_after_keyword in that case."""
+    _find_after_keyword in that case.
+
+    Bilingual invoices print each field as a Thai label line *and* an
+    English label line (e.g. "ภาษีมูลค่าเพิ่ม 7%" then "VAT 7%"), and both
+    may independently match the same key's patterns. Two consecutive lines
+    that classify to the *same* key are collapsed into a single label so
+    they still count as one field, keeping the label count aligned with
+    the value count."""
     lines = [l.strip() for l in text.splitlines()]
     n = len(lines)
     for start in range(n):
@@ -321,7 +395,8 @@ def _extract_totals_block(text):
             key = _classify_totals_label(lines[j])
             if key is None:
                 break
-            labels.append(key)
+            if not labels or labels[-1] != key:
+                labels.append(key)
             j += 1
         if len(labels) < 2:
             continue
