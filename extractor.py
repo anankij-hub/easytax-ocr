@@ -99,18 +99,29 @@ def _best_match_on_line(rest, value_pattern):
 def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahead_lines=2, skip_header_lines=True):
     """Find the value that appears shortly after one of the given keywords.
 
-    Searches line by line first. If the keyword's own line doesn't contain
-    a usable value, also checks the next couple of lines — OCR (especially
-    Google Vision on a boxed/tabular layout) sometimes puts a label and its
-    value on separate lines even though they're the same visual field.
-    Lines that look like the line-items table header are skipped so a
-    column header (e.g. 'ราคา/หน่วย') can't be mistaken for a totals field.
-    Falls back to a raw character-window search if nothing is found."""
+    Keywords are tried in priority order: every occurrence of the FIRST
+    keyword in the document is checked before moving on to the second
+    keyword, etc. This matters because a document can contain more than one
+    label that matches *something* in the list — e.g. a real invoice
+    printed "เลขที่เอกสาร" (a generic document number) above "เลขที่ใบกำกับภาษี"
+    (the actual tax invoice number). A naive top-to-bottom scan that
+    returns on the first line matching *any* keyword would grab the wrong
+    one just because it happens to appear earlier on the page. Looping
+    keyword-first instead makes sure the more specific/preferred label
+    always wins regardless of where it sits on the page.
+
+    For each keyword occurrence, checks the same line first, then falls
+    back to the next couple of lines (OCR — especially Google Vision on a
+    boxed/tabular layout — sometimes puts a label and its value on
+    separate lines even though they're the same visual field). Lines that
+    look like the line-items table header are skipped so a column header
+    (e.g. 'ราคา/หน่วย') can't be mistaken for a totals field. Falls back to
+    a raw character-window search if nothing is found."""
     lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if skip_header_lines and TABLE_HEADER_LINE_RE.search(line):
-            continue
-        for kw in keywords:
+    for kw in keywords:
+        for i, line in enumerate(lines):
+            if skip_header_lines and TABLE_HEADER_LINE_RE.search(line):
+                continue
             m = re.search(kw, line, re.IGNORECASE)
             if not m:
                 continue
@@ -228,7 +239,14 @@ def extract_seller_name(text):
 
 def extract_buyer_name(text):
     val = _find_after_keyword(text, BUYER_KEYWORDS, value_pattern=r"[^\n]{3,60}")
-    return val.strip() if val else None
+    if not val:
+        return None
+    val = val.strip()
+    # The keyword match only skips past the label itself (e.g. "ลูกค้า"), so
+    # a layout like "ชื่อลูกค้า : บริษัท A จำกัด" leaves a leading ":" in the
+    # captured value — strip that (and other separator punctuation) off.
+    val = re.sub(r"^[:：\-–]\s*", "", val).strip()
+    return val or None
 
 
 def classify_doc_type(fields):
@@ -260,74 +278,66 @@ def build_review_reasons(fields):
     return reasons
 
 
-# Full 8-column row, matching the common Thai tax-invoice table layout:
-#   ลำดับ  รหัสสินค้า  รายการ  จำนวน  หน่วย  ราคา/หน่วย  ส่วนลด  จำนวนเงิน
-#     1    001-001    ปากกาลูกลื่น (1*24)   1   กล่อง   135   0   135
-# Decimals are optional (many invoices print whole-baht line amounts with
-# no ".00"), which the previous version required and so silently dropped
-# every row on invoices like this.
-LINE_ITEM_FULL_RE = re.compile(
-    r"^\s*(?P<idx>\d{1,3})\s+"
-    r"(?P<code>[A-Za-zก-๙0-9][A-Za-zก-๙0-9\-]{1,15})\s+"
-    r"(?P<name>.+?)\s+"
-    r"(?P<qty>\d+(?:\.\d+)?)\s+"
-    r"(?P<unit>[ก-๙A-Za-z]+)\s+"
-    r"(?P<price>[\d,]+(?:\.\d+)?)\s+"
-    r"(?P<discount>[\d,]+(?:\.\d+)?)\s+"
-    r"(?P<amount>[\d,]+(?:\.\d+)?)\s*$"
-)
+# Some OCR engines (Google Vision included) read a boxed totals section as
+# two separate runs of lines — every label first, then every value — rather
+# than one "label   value" pair per line, when the label column and value
+# column get grouped as separate text blocks. Same-line/window matching
+# then grabs whichever number is textually nearest to a label, which is
+# often the WRONG number (and can make subtotal/VAT/total all resolve to
+# the same figure — the first value in the value run). This block detects
+# that shape and pairs the Nth label with the Nth value instead.
+_TOTALS_BLOCK_KEYS = [
+    ("subtotal", SUBTOTAL_KEYWORDS),
+    ("discount", [r"ส่วนลด", r"Discount"]),
+    ("vat", VAT_KEYWORDS),
+    ("total", TOTAL_KEYWORDS),
+]
 
-# Simpler fallback for invoices with just 'description  qty  unit_price
-# amount' (no index/code/unit/discount columns).
-LINE_ITEM_SIMPLE_RE = re.compile(
-    r"^(?P<desc>.{2,60}?)\s+"
-    r"(?P<qty>\d+(?:\.\d+)?)\s+"
-    r"(?P<price>[\d,]+(?:\.\d+)?)\s+"
-    r"(?P<amount>[\d,]+(?:\.\d+)?)\s*$"
-)
-
-LINE_ITEM_SKIP_KEYWORDS = (
-    SUBTOTAL_KEYWORDS + TOTAL_KEYWORDS + VAT_KEYWORDS +
-    [r"ส่วนลด", r"Discount", r"หัก", r"ยอดสุทธิ"]
-)
+PURE_NUMBER_LINE_RE = re.compile(r"^[-+]?\d[\d,]*(?:\.\d+)?\s*%?$")
 
 
-def extract_line_items(text):
-    """Best-effort extraction of a product/service table from OCR text.
-    Tries the full 8-column row shape first, then falls back to a simpler
-    'description qty price amount' shape. This is still a heuristic (no
-    real table/column detection), so it works best on invoices with a
-    one-row-per-line item table and will miss multi-line descriptions or
-    unusual column layouts — always let the user review/edit the result."""
-    items = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
+def _classify_totals_label(line):
+    for key, patterns in _TOTALS_BLOCK_KEYS:
+        for pat in patterns:
+            if re.search(pat, line, re.IGNORECASE):
+                return key
+    return None
+
+
+def _extract_totals_block(text):
+    """Look for a run of consecutive recognizable total-related label lines
+    immediately followed by a run of the same number of pure-number lines,
+    and pair them up by position. Returns raw string values keyed by
+    "subtotal"/"discount"/"vat"/"total" (only for keys actually found), or
+    {} if the text doesn't have this shape — callers should fall back to
+    _find_after_keyword in that case."""
+    lines = [l.strip() for l in text.splitlines()]
+    n = len(lines)
+    for start in range(n):
+        labels = []
+        j = start
+        while (j < n and lines[j] and not PURE_NUMBER_LINE_RE.match(lines[j])
+               and not TABLE_HEADER_LINE_RE.search(lines[j])):
+            key = _classify_totals_label(lines[j])
+            if key is None:
+                break
+            labels.append(key)
+            j += 1
+        if len(labels) < 2:
             continue
-        if TABLE_HEADER_LINE_RE.search(line):
-            continue  # table header row itself, not a data row
-        if any(re.search(kw, line, re.IGNORECASE) for kw in LINE_ITEM_SKIP_KEYWORDS):
-            continue
-
-        m = LINE_ITEM_FULL_RE.match(line)
-        if m:
-            items.append({
-                "description": m.group("name").strip(),
-                "qty": _clean_number(m.group("qty")),
-                "unit_price": _clean_number(m.group("price")),
-                "amount": _clean_number(m.group("amount")),
-            })
-            continue
-
-        m = LINE_ITEM_SIMPLE_RE.match(line)
-        if m:
-            items.append({
-                "description": m.group("desc").strip(),
-                "qty": _clean_number(m.group("qty")),
-                "unit_price": _clean_number(m.group("price")),
-                "amount": _clean_number(m.group("amount")),
-            })
-    return items
+        values = []
+        k = j
+        while k < n and lines[k] and PURE_NUMBER_LINE_RE.match(lines[k]):
+            values.append(lines[k])
+            k += 1
+        if len(values) == len(labels):
+            result = {}
+            for key, val in zip(labels, values):
+                result[key] = val  # a later same-key label (e.g. the
+                # post-discount subtotal) intentionally overwrites an
+                # earlier one, matching _find_after_keyword's own priority
+            return result
+    return {}
 
 
 def extract_fields(text, ocr_confidence=None):
@@ -338,10 +348,14 @@ def extract_fields(text, ocr_confidence=None):
     seller_tax_id = extract_tax_id(text)
     seller_name = extract_seller_name(text)
     buyer_name = extract_buyer_name(text)
-    subtotal = _clean_number(_find_after_keyword(text, SUBTOTAL_KEYWORDS))
-    vat = _clean_number(_find_after_keyword(text, VAT_KEYWORDS))
-    total = _clean_number(_find_after_keyword(text, TOTAL_KEYWORDS))
-    line_items = extract_line_items(text)
+
+    totals_block = _extract_totals_block(text)
+    subtotal = (_clean_number(totals_block["subtotal"]) if "subtotal" in totals_block
+                else _clean_number(_find_after_keyword(text, SUBTOTAL_KEYWORDS)))
+    vat = (_clean_number(totals_block["vat"]) if "vat" in totals_block
+           else _clean_number(_find_after_keyword(text, VAT_KEYWORDS)))
+    total = (_clean_number(totals_block["total"]) if "total" in totals_block
+             else _clean_number(_find_after_keyword(text, TOTAL_KEYWORDS)))
 
     fields = {
         "invoice_no": invoice_no,
@@ -353,7 +367,6 @@ def extract_fields(text, ocr_confidence=None):
         "subtotal": subtotal,
         "vat": vat,
         "total": total,
-        "line_items": line_items,
         "ocr_confidence": ocr_confidence,
         "_has_tax_invoice_marker": bool(re.search(TAXINV_MARKER, text)),
     }

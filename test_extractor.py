@@ -31,18 +31,25 @@ ABBREVIATED_RECEIPT_TEXT = """ร้านจรรยา
 ขอบคุณที่ใช้บริการ
 """
 
-# Mirrors a real vendor invoice layout reported by a user: 8-column item
-# table (ลำดับ/รหัสสินค้า/รายการ/จำนวน/หน่วย/ราคา-หน่วย/ส่วนลด/จำนวนเงิน),
-# whole-baht line amounts with no decimals, and a totals block that uses
-# "มูลค่าหลังส่วนลด" / "จำนวนเงินทั้งสิ้น" (no "รวม") instead of the
-# "รวมเป็นเงิน" / "จำนวนเงินรวมทั้งสิ้น" wording used elsewhere. The old
-# extractor mis-parsed this as subtotal=13, vat=7 (just the "7" from "7%"),
-# total=None, and 0 line items.
+# Mirrors a real vendor invoice layout reported by a user, including two
+# OCR quirks that tripped up earlier versions of the extractor:
+#   1. "เลขที่เอกสาร" (a generic doc number) is printed ABOVE the real
+#      "เลขที่ใบกำกับภาษี" field — a naive top-to-bottom scan grabs the
+#      wrong one just because it appears first on the page.
+#   2. The totals box gets OCR'd as a run of label lines followed by a run
+#      of value lines (label column and value column read as separate
+#      blocks) instead of one "label value" pair per line — same-line/
+#      window matching then grabs the nearest number regardless of which
+#      label it actually belongs to, making subtotal/VAT/total all resolve
+#      to the same (wrong) figure.
+# Also: "ชื่อลูกค้า : บริษัท A จำกัด" uses a colon separator, which used to
+# leak a leading ":" into the extracted buyer name.
 REAL_VENDOR_INVOICE_TEXT = """บริษัท รจนา จำกัด (สำนักงานใหญ่)
 36/9 แขวงขุมทอง เขตลาดกระบัง กรุงเทพฯ 10250
 เลขประจำตัวผู้เสียภาษี 0105558887774
 โทร/แฟกซ์. 020-4567-902
 ใบกำกับภาษี/ใบเสร็จรับเงิน
+เลขที่เอกสาร INV6801015
 ชื่อลูกค้า : บริษัท A จำกัด
 ที่อยู่ : 99/15 ถนนวิภาวดีรังสิต แขวงจอมพล เขตจตุจักร
 กรุงเทพมหานคร 10900
@@ -55,12 +62,16 @@ REAL_VENDOR_INVOICE_TEXT = """บริษัท รจนา จำกัด (�
 3 015-008 เครื่องคิดเลข 5 เครื่อง 370 0 1,850
 4 020-004 แฟ้มใส่เอกสาร (A4) 30 แฟ้ม 80 0 2,400
 หมายเหตุ
-รวมเงิน 4,434.58
-ส่วนลด 0.00
-มูลค่าหลังส่วนลด 4,434.58
-ภาษีมูลค่าเพิ่ม 7% 310.42
-(สี่พันเจ็ดร้อยสี่สิบห้าบาทถ้วน)
-จำนวนเงินทั้งสิ้น 4,745.00
+รวมเงิน
+ส่วนลด
+มูลค่าหลังส่วนลด
+ภาษีมูลค่าเพิ่ม 7%
+จำนวนเงินทั้งสิ้น
+4,434.58
+0.00
+4,434.58
+310.42
+4,745.00
 """
 
 
@@ -98,23 +109,18 @@ def main():
     # bad checksum should fail validation
     all_ok &= check("bad checksum rejected", extractor.validate_thai_tax_id("0105567123469") is False)
 
-    # regression: real vendor invoice with an 8-column item table and
-    # non-decimal line amounts (see comment on REAL_VENDOR_INVOICE_TEXT)
+    # regression: real vendor invoice with "เลขที่เอกสาร" printed above the
+    # real "เลขที่ใบกำกับภาษี", a colon-separated buyer name, and a
+    # column-major totals box (see comment on REAL_VENDOR_INVOICE_TEXT)
     fields3 = extractor.extract_fields(REAL_VENDOR_INVOICE_TEXT, ocr_confidence=88.0)
     print("\n--- Real vendor invoice fields ---")
     for k, v in fields3.items():
         print(f"  {k}: {v}")
-    all_ok &= check("real invoice: invoice_no", fields3["invoice_no"] == "IV0100168-99")
-    all_ok &= check("real invoice: subtotal = 4434.58 (not 13)", fields3["subtotal"] == 4434.58)
-    all_ok &= check("real invoice: vat = 310.42 (not 7)", fields3["vat"] == 310.42)
-    all_ok &= check("real invoice: total = 4745.0 (not None)", fields3["total"] == 4745.0)
-    all_ok &= check("real invoice: 4 line items extracted", len(fields3["line_items"]) == 4)
-    if fields3["line_items"]:
-        first = fields3["line_items"][0]
-        all_ok &= check("real invoice: item1 description", first["description"] == "ปากกาลูกลื่น (1*24)")
-        all_ok &= check("real invoice: item1 qty=1", first["qty"] == 1)
-        all_ok &= check("real invoice: item1 unit_price=135", first["unit_price"] == 135)
-        all_ok &= check("real invoice: item1 amount=135", first["amount"] == 135)
+    all_ok &= check("real invoice: invoice_no = IV0100168-99 (not INV6801015)", fields3["invoice_no"] == "IV0100168-99")
+    all_ok &= check("real invoice: buyer_name has no leading colon", fields3["buyer_name"] == "บริษัท A จำกัด")
+    all_ok &= check("real invoice: subtotal = 4434.58", fields3["subtotal"] == 4434.58)
+    all_ok &= check("real invoice: vat = 310.42 (not 4434.58)", fields3["vat"] == 310.42)
+    all_ok &= check("real invoice: total = 4745.0 (not 4434.58)", fields3["total"] == 4745.0)
 
     # multi-invoice split
     combined = FULL_INVOICE_TEXT + "\n" + FULL_INVOICE_TEXT

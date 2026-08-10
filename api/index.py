@@ -345,7 +345,7 @@ def upload():
                             fields["ocr_confidence"], chunk,
                             psycopg2.Binary(file_data) if file_data else None,
                             mime if file_data else None,
-                            db.to_jsonb(fields["line_items"]),
+                            db.to_jsonb([]),  # line-items feature removed; column kept for schema compatibility
                         ),
                     )
                     saved_count += 1

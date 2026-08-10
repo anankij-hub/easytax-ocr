@@ -78,12 +78,6 @@
   .form-field select, .form-field input[type=text], .form-field input[type=number] {
     width:100%; padding:8px 10px; border:1px solid var(--gray-200); border-radius:8px; font-size:13px;
   }
-  .items-table { width:100%; border-collapse:collapse; margin-bottom:12px; }
-  .items-table th { font-size:11px; color:var(--gray-500); text-align:left; padding:6px 4px; }
-  .items-table td { padding:4px; }
-  .items-table input { width:100%; padding:6px 8px; border:1px solid var(--gray-200); border-radius:6px; font-size:12px; }
-  .items-table input.desc { width:100%; }
-  .items-table input.num { text-align:right; }
   .modal-footer { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; border-top:1px solid var(--gray-200); }
 </style>
 </head>
@@ -280,12 +274,6 @@
           </div>
         </div>
 
-        <label style="font-size:13px; font-weight:600; display:block; margin-bottom:8px;">รายการสินค้า</label>
-        <table class="items-table">
-          <thead><tr><th>รายการ</th><th style="width:70px">จำนวน</th><th style="width:90px">ราคา/หน่วย</th><th style="width:90px">รวม</th><th></th></tr></thead>
-          <tbody id="modalItemsBody"></tbody>
-        </table>
-        <button class="btn secondary" style="padding:6px 12px; font-size:12px; margin-bottom:8px;" onclick="addLineItemRow()">+ เพิ่มรายการ</button>
       </div>
     </div>
     <div class="modal-footer">
@@ -526,43 +514,12 @@ function openEditModal(inv) {
   document.getElementById('f_vat').value = inv.vat ?? '';
   document.getElementById('f_total').value = inv.total ?? '';
 
-  const body = document.getElementById('modalItemsBody');
-  body.innerHTML = '';
-  (inv.line_items || []).forEach(item => addLineItemRow(item));
-  if (!(inv.line_items || []).length) addLineItemRow();
-
   document.getElementById('editModalOverlay').style.display = 'flex';
-}
-
-function addLineItemRow(item) {
-  item = item || {};
-  const body = document.getElementById('modalItemsBody');
-  const tr = document.createElement('tr');
-  tr.innerHTML = `
-    <td><input class="desc" type="text" value="${(item.description || '').replace(/"/g, '&quot;')}" /></td>
-    <td><input class="num" type="number" step="0.01" value="${item.qty ?? ''}" /></td>
-    <td><input class="num" type="number" step="0.01" value="${item.unit_price ?? ''}" /></td>
-    <td><input class="num" type="number" step="0.01" value="${item.amount ?? ''}" /></td>
-    <td><button class="btn danger" style="padding:4px 8px" onclick="this.closest('tr').remove()">✕</button></td>
-  `;
-  body.appendChild(tr);
 }
 
 function closeEditModal() {
   document.getElementById('editModalOverlay').style.display = 'none';
   modalInvoiceId = null;
-}
-
-function collectLineItems() {
-  return [...document.querySelectorAll('#modalItemsBody tr')].map(tr => {
-    const inputs = tr.querySelectorAll('input');
-    return {
-      description: inputs[0].value.trim(),
-      qty: inputs[1].value === '' ? null : Number(inputs[1].value),
-      unit_price: inputs[2].value === '' ? null : Number(inputs[2].value),
-      amount: inputs[3].value === '' ? null : Number(inputs[3].value),
-    };
-  }).filter(it => it.description || it.qty || it.unit_price || it.amount);
 }
 
 async function saveEditModal() {
@@ -579,7 +536,6 @@ async function saveEditModal() {
     total: document.getElementById('f_total').value === '' ? null : Number(document.getElementById('f_total').value),
     needs_review: 0,
     review_reason: null,
-    line_items: collectLineItems(),
   };
   await fetch(`/api/invoices/${modalInvoiceId}`, {
     method: 'PUT', headers: {'Content-Type': 'application/json'},
