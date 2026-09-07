@@ -592,6 +592,15 @@ def extract_fields(text, ocr_confidence=None):
         "_has_tax_invoice_marker": bool(re.search(TAXINV_MARKER, text)),
     }
     fields["doc_type"] = classify_doc_type(fields)
+
+    # ใบกำกับภาษีอย่างย่อ (ม.86/6) แสดงได้เฉพาะยอดรวมที่รวม VAT แล้วเท่านั้น
+    # ห้ามแยกยอดก่อนภาษี/VAT ตามกฎหมาย ถ้า regex จับตัวเลขมาผิด ๆ ได้ (เช่น
+    # หลุดมาจากตารางรายการสินค้า หรือบรรทัดที่ไม่เกี่ยวข้อง) ก็ต้องทิ้งไป
+    # ไม่ใช่ค่าที่ควรมีอยู่จริงบนเอกสารประเภทนี้
+    if fields["doc_type"] == "ย่อ":
+        fields["subtotal"] = None
+        fields["vat"] = None
+
     reasons = build_review_reasons(fields)
     fields["needs_review"] = bool(reasons)
     fields["review_reason"] = "; ".join(reasons) if reasons else None
