@@ -81,6 +81,25 @@ BUYER_KEYWORDS = [
 TAXINV_MARKER = r"ใบกำกับภาษี"
 RECEIPT_MARKER = r"ใบเสร็จรับเงิน"
 
+# เอกสารประกาศตัวเองชัดเจนว่าเป็น "ใบกำกับภาษีอย่างย่อ" (หรือคำแปลอังกฤษ) — ถ้า
+# เจอ ให้ตัดสินเป็นย่อทันทีโดยไม่ต้องพิจารณาเงื่อนไขอื่นเลย เพราะผู้ออกเอกสารระบุ
+# ประเภทของมันมาให้เองแล้ว จับเฉพาะตอนที่คำว่า "อย่างย่อ" อยู่ใกล้กับคำว่า
+# "ใบกำกับภาษี"/"ใบเสร็จ" เท่านั้น (ไม่จับคำว่า "อย่างย่อ" ที่ปรากฏลอย ๆ ในที่อื่น
+# ของเอกสาร ซึ่งอาจไม่เกี่ยวกับประเภทของใบกำกับภาษีเลย). หน้าต่าง 15 ตัวอักษร
+# กว้างพอให้ครอบคลุมหัวเอกสารแบบผสม เช่น "ใบกำกับภาษี/ใบเสร็จรับเงิน (อย่างย่อ)"
+# ที่มีข้อความอื่นคั่นอยู่ระหว่างคำสองคำนี้ด้วย
+ABBREVIATED_MARKER_RE = re.compile(
+    r"ใบกำกับภาษี\s*อย่างย่อ|ใบเสร็จ[^\n]{0,15}อย่างย่อ|"
+    r"Abbreviated\s*Tax\s*Invoice|Simplified\s*Tax\s*Invoice",
+    re.IGNORECASE,
+)
+
+# เอกสารระบุตัวเองว่าเป็น "ใบกำกับภาษี" (ไทย) หรือ "Tax Invoice" (อังกฤษ) — ตาม
+# ม.86/4 ใบกำกับภาษีเต็มรูปต้องมีคำนี้ปรากฏอยู่ในที่เห็นได้ชัดเจน เอกสารที่ไม่มี
+# คำนี้เลย (เช่นเป็นใบเสร็จรับเงินธรรมดาที่ไม่ใช่ใบกำกับภาษี) จึงไม่มีทางเป็น
+# เต็มรูปได้เลยไม่ว่าฟิลด์อื่น ๆ จะครบแค่ไหนก็ตาม
+FULL_FORM_TITLE_RE = re.compile(r"ใบกำกับภาษี|Tax\s*Invoice", re.IGNORECASE)
+
 # A line that is clearly part of the line-items table header (not a data
 # row, not a totals line) — used to keep totals/VAT extraction from
 # misreading header text as a value. Confirmed on a real invoice: a
@@ -366,14 +385,33 @@ def extract_buyer_name(text):
 
 
 def classify_doc_type(fields):
-    """เต็มรูป ต้องมีเลขผู้เสียภาษีผู้ขาย (13 หลัก) + เลขที่ใบกำกับ + ชื่อผู้ซื้อ
-    ถ้าขาดอย่างใดอย่างหนึ่ง ถือเป็นใบย่อ (หัก VAT ซื้อไม่ได้). ไม่ตรวจสอบ checksum
-    ของเลขผู้เสียภาษีอีกต่อไป — แค่สกัดเลขออกมาได้ครบ 13 หลักก็พอ."""
-    has_marker = fields.get("_has_tax_invoice_marker")
+    """ตัดสินประเภทเอกสารเป็น "เต็มรูป" หรือ "ย่อ" ตามลำดับความสำคัญนี้:
+
+    1. เอกสารระบุตัวเองชัดเจนว่าเป็น "ใบกำกับภาษีอย่างย่อ" (หรือคำแปลอังกฤษ)
+       -> ย่อ ทันที ไม่ต้องพิจารณาเงื่อนไขอื่นต่อ เพราะผู้ออกเอกสารบอกประเภท
+       มาให้เองแล้ว
+
+    2. เอกสารไม่มีคำว่า "ใบกำกับภาษี" (ไทย) หรือ "Tax Invoice" (อังกฤษ) ปรากฏ
+       อยู่เลย -> ย่อ (ตาม ม.86/4 ใบกำกับภาษีเต็มรูปต้องมีคำนี้ระบุไว้ชัดเจน
+       เอกสารที่ไม่มีคำนี้เลย เช่นใบเสร็จรับเงินธรรมดา ไม่มีทางเป็นเต็มรูปได้)
+
+    3. มีคำว่า "ใบกำกับภาษี"/"Tax Invoice" และไม่ได้ระบุว่าเป็นอย่างย่อ แต่ยัง
+       ขาดองค์ประกอบบังคับของเต็มรูป (เลขผู้เสียภาษีผู้ขาย 13 หลัก / เลขที่
+       ใบกำกับ / ชื่อผู้ซื้อ) -> ถือว่ากรอกไม่ครบตามเกณฑ์เต็มรูป จึงตัดสินเป็น
+       ย่อเช่นกัน (ปลอดภัยกว่าในทางบัญชี เพราะใบที่กรอกไม่ครบก็ใช้หัก VAT ซื้อ
+       ไม่ได้อยู่ดี). ไม่ตรวจสอบ checksum ของเลขผู้เสียภาษีอีกต่อไป — แค่สกัด
+       เลขออกมาได้ครบ 13 หลักก็พอ.
+
+    4. ผ่านทั้งสามเงื่อนไขข้างต้น -> เต็มรูป
+    """
+    if fields.get("_has_abbreviated_marker"):
+        return "ย่อ"
+    if not fields.get("_has_full_form_title"):
+        return "ย่อ"
     has_tax_id = has_valid_tax_id_format(fields.get("seller_tax_id"))
     has_invoice_no = bool(fields.get("invoice_no"))
     has_buyer = bool(fields.get("buyer_name"))
-    if has_marker and has_tax_id and has_invoice_no and has_buyer:
+    if has_tax_id and has_invoice_no and has_buyer:
         return "เต็มรูป"
     return "ย่อ"
 
@@ -589,7 +627,8 @@ def extract_fields(text, ocr_confidence=None):
         "vat": vat,
         "total": total,
         "ocr_confidence": ocr_confidence,
-        "_has_tax_invoice_marker": bool(re.search(TAXINV_MARKER, text)),
+        "_has_full_form_title": bool(FULL_FORM_TITLE_RE.search(text)),
+        "_has_abbreviated_marker": bool(ABBREVIATED_MARKER_RE.search(text)),
     }
     fields["doc_type"] = classify_doc_type(fields)
 
