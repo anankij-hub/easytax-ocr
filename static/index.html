@@ -535,7 +535,7 @@ async function saveEditModal() {
     subtotal: document.getElementById('f_subtotal').value === '' ? null : Number(document.getElementById('f_subtotal').value),
     vat: document.getElementById('f_vat').value === '' ? null : Number(document.getElementById('f_vat').value),
     total: document.getElementById('f_total').value === '' ? null : Number(document.getElementById('f_total').value),
-    needs_review: 0,
+    needs_review: false,
     review_reason: null,
   };
   await fetch(`/api/invoices/${modalInvoiceId}`, {
