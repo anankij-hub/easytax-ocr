@@ -63,7 +63,7 @@ VAT_KEYWORDS = [r"ภาษีมูลค่าเพิ่ม", r"VAT", r"Vat"
 # just "จำนวนเงิน" / "SUB TOTAL".
 SUBTOTAL_KEYWORDS = [
     r"มูลค่าหลังส่วนลด", r"จำนวนเงินหลังหักส่วนลด", r"หลังหักส่วนลด",
-    r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า",
+    r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า", r"ราคารวมสินค้า",
     r"รวมเป็นเงิน", r"รวมเงิน", r"After\s*Discount", r"Sub\s*Total", r"จำนวนเงิน",
 ]
 TOTAL_KEYWORDS = [
@@ -92,9 +92,7 @@ RECEIPT_MARKER = r"ใบเสร็จรับเงิน"
 # scanner can lock onto this row plus the first line item's numbers and
 # return a completely wrong (but internally consistent) result.
 TABLE_HEADER_LINE_RE = re.compile(
-    # (?!สุทธิ) so this doesn't collide with the real grand-total label
-    # "จำนวนเงินรวมสุทธิ", which legitimately starts with the same prefix.
-    r"ลำดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย|ราคาต่อหน่วย|รายการสินค้า|จำนวนเงินรวม(?!สุทธิ)|"
+    r"ลำดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย|ราคาต่อหน่วย|รายการสินค้า|จำนวนเงินรวม(?!สุทธิ|ทั้งสิ้น)|"
     r"PRODUCT\s*CODE|DESCRIPTION|QUANTITY|UNIT\s*PRICE|ITEM\s*DISCOUNT|TOTAL\s*AMOUNT",
     re.IGNORECASE,
 )
