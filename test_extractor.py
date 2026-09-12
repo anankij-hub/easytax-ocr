@@ -443,6 +443,69 @@ Sgomfare
 """
 
 
+# Raw OCR text from the live app for the JP invoice IV6800413-039 — ground
+# truth. The extractor found no amounts at all on this one, for two reasons:
+#   - Every figure is printed in the Thai whole-baht shorthand ("1,300.-",
+#     "91.-", "1,391.-"), which parsed as no number at all.
+#   - The totals figures are separated from their labels by the entire
+#     payment-method and signature block — eight lines — so the label/value
+#     pairing gave up long before reaching them.
+# Also here: a bilingual "ชื่อลูกค้า/Customer Name :" label, a "รหัสลูกค้า/
+# Customer Code : 7820-12" field that must not be mistaken for the buyer,
+# and OCR dropping ำ in several words ("ล่าดับ", "การชาระเงิน", "ผู้มีอานาจ").
+REAL_JP_RAW_TEXT = """JP
+บริษัท โจธนารักษ์ แพตเดอร์สัน จำกัด (สำนักงานใหญ่)
+123/69 ถนนฉลองกรุง แขวงลาดกระบัง เขตลาดกระบัง กรุงเทพฯ 10520
+เลขประจำตัวผู้เสียภาษี 0105576890143
+โทร. 020-5345-678 /แฟกซ์. 026-9267-00
+ชื่อลูกค้า/Customer Name : บริษัท เอ จำกัด
+ที่อยู่/Address : 99/15 ถนนวิภาวดีรังสิต แขวงจอมพล เขตจตุจักร กรุงเทพมหานคร 10900
+เลขประจำตัวผู้เสียภาษี/TAX ID : 0105569123456
+เลขที่ใบสั่งชื้อ/Order No.
+พนักงานขาย/Salesman
+กำหนดชาระ/Due Date
+ใบกำกับภาษี/ใบเสร็จรับเงิน
+TAX INVOICE/RECEIPT
+เลขที่/No.
+วันที่/Date.
+**ต้นฉบับ/Original**
+IV6800413-039
+13/04/68
+รหัสลูกค้า/Customer Code : 7820-12
+ล่าดับ
+1.
+ออกแบบผลิตภัณฑ์
+หมายเหตุ
+000
+รายการ
+จำนวน
+ราคา
+ราคาสุทธิ
+1
+1,300.-
+1,300.-
+ราคารวมสินค้า (บาท)
+ภาษีมูลค่าเพิ่ม (VAT) 7%
+(หนึ่งพันสามร้อยเก้าสิบเอ็ด)
+จำนวนเงินทั้งสิ้น (บาท)
+การชาระเงิน/Payment
+เงินสด Cash
+โอนเข้าบัญชี Tater.No..
+เช็ค/Chegue.No..
+วันที่/Date
+ในนามบริษัท โจธนารักษ์ แพตเดอร์สัน จำกัด
+ผู้มีอานาจลงนาม
+.....................
+1,300.-
+91.-
+1,391.-
+ลงนามพนักงานรับเงิน
+(วันที
+ลงนามพนักงานส่งของ
+......................
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -565,6 +628,33 @@ def main():
     all_ok &= check("real rojana: seller tax id", fields6["seller_tax_id"] == "0105558887774")
     all_ok &= check("real rojana: classified เต็มรูป", fields6["doc_type"] == "เต็มรูป")
     all_ok &= check("real rojana: not flagged for review", fields6["needs_review"] is False)
+
+    # regression: the ACTUAL raw OCR text for the JP invoice (see comment on
+    # REAL_JP_RAW_TEXT) — amounts in Thai "1,300.-" shorthand, printed far
+    # away from their labels. The app showed all three amount fields empty.
+    fields7 = extractor.extract_fields(REAL_JP_RAW_TEXT, ocr_confidence=92.0)
+    print("\n--- Real JP OCR text fields ---")
+    for k, v in fields7.items():
+        print(f"  {k}: {v}")
+    all_ok &= check("real jp: subtotal = 1300.0 (was empty)", fields7["subtotal"] == 1300.0)
+    all_ok &= check("real jp: vat = 91.0 (was empty)", fields7["vat"] == 91.0)
+    all_ok &= check("real jp: total = 1391.0 (was empty)", fields7["total"] == 1391.0)
+    all_ok &= check(
+        "real jp: buyer_name = บริษัท เอ จำกัด (not the Customer Code)",
+        fields7["buyer_name"] == "บริษัท เอ จำกัด",
+    )
+    all_ok &= check("real jp: invoice_no = IV6800413-039", fields7["invoice_no"] == "IV6800413-039")
+    all_ok &= check("real jp: date = 2025-04-13", fields7["invoice_date_iso"] == "2025-04-13")
+    all_ok &= check("real jp: seller tax id", fields7["seller_tax_id"] == "0105576890143")
+    all_ok &= check("real jp: classified เต็มรูป", fields7["doc_type"] == "เต็มรูป")
+    all_ok &= check("real jp: not flagged for review", fields7["needs_review"] is False)
+
+    # the "1,300.-" whole-baht shorthand, on its own
+    all_ok &= check("'1,300.-' parses as 1300.0", extractor._clean_number("1,300.-") == 1300.0)
+    all_ok &= check("'91.-' parses as 91.0", extractor._clean_number("91.-") == 91.0)
+    all_ok &= check("'1,300,-' parses as 1300.0", extractor._clean_number("1,300,-") == 1300.0)
+    all_ok &= check("'2,571.03' still parses", extractor._clean_number("2,571.03") == 2571.03)
+    all_ok &= check("'-50.00' is still negative", extractor._clean_number("-50.00") == -50.0)
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
     # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the

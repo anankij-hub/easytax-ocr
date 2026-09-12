@@ -122,10 +122,18 @@ TAXID_RE = re.compile(r"(\d[\s-]?\d{4}[\s-]?\d{5}[\s-]?\d{2}[\s-]?\d)")
 TAXID_PLAIN_RE = re.compile(r"\b\d{13}\b")
 
 
+# Thai invoices very often write a whole-baht amount as "1,300.-" (and
+# sometimes "1,300,-"), where the dash stands in for the satang rather than
+# being a minus sign. Confirmed on a real invoice where EVERY amount was
+# printed this way, which made the extractor report no amounts at all.
+TRAILING_DASH_SATANG_RE = re.compile(r"\s*[.,]-\s*$")
+
+
 def _clean_number(s):
     if s is None:
         return None
-    s = s.translate(THAI_DIGITS).replace(",", "").strip()
+    s = TRAILING_DASH_SATANG_RE.sub("", s.translate(THAI_DIGITS).strip())
+    s = s.replace(",", "").strip()
     try:
         return float(s)
     except ValueError:
@@ -780,7 +788,14 @@ _TOTALS_BLOCK_KEYS = [
 ]
 _TOTALS_BLOCK_FALLBACK_KEY = ("subtotal", [r"จำนวนเงิน"])
 
-PURE_NUMBER_LINE_RE = re.compile(r"^[-+]?\d[\d,]*(?:\.\d+)?\s*%?$")
+# How many non-numeric lines may sit between the totals labels and the
+# totals figures before we stop believing they belong together.
+_TOTALS_BLOCK_MAX_GAP = 12
+
+# Trailing "[.,]-" is the Thai whole-baht shorthand, not a minus sign — see
+# TRAILING_DASH_SATANG_RE. A totals column printed as "1,300.- / 91.- /
+# 1,391.-" has to register as a run of numbers like any other.
+PURE_NUMBER_LINE_RE = re.compile(r"^[-+]?\d[\d,]*(?:\.\d+)?\s*(?:[.,]-)?\s*%?$")
 
 
 def _classify_totals_label(line):
@@ -836,8 +851,24 @@ def _extract_totals_block(text):
             j += 1
         if len(labels) < 2:
             continue
-        values = []
+        # The value run doesn't always begin where the label run ends.
+        # Confirmed on a real invoice: the whole payment-method and
+        # signature block ("การชำระเงิน/Payment", "เงินสด Cash", "ผู้มีอำนาจ
+        # ลงนาม", a row of dots...) was emitted between the totals labels
+        # and the totals figures, eight lines of it, so requiring the
+        # numbers to start immediately found nothing at all. Skip over
+        # non-numeric lines to reach the figures, but stop at another
+        # totals label — those numbers would belong to it, not to us.
         k = j
+        gap = 0
+        while k < n and not (lines[k] and PURE_NUMBER_LINE_RE.match(lines[k])):
+            if lines[k] and _classify_totals_label(lines[k]) is not None:
+                break
+            gap += 1
+            if gap > _TOTALS_BLOCK_MAX_GAP:
+                break
+            k += 1
+        values = []
         while k < n and lines[k] and PURE_NUMBER_LINE_RE.match(lines[k]):
             values.append(lines[k])
             k += 1
