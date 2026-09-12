@@ -122,6 +122,10 @@ _LOOKAHEAD_LABEL_BLOCKLIST = {
     "no", "name", "phone no", "seller name", "seller address", "vat 7%",
 }
 
+# How far a value may run past the end of a keyword's search window before
+# it is clipped — long enough for any document number or amount.
+_WINDOW_OVERRUN = 40
+
 NUM_RE = r"[-+]?\d[\d,]*(?:\.\d+)?"
 TAXID_RE = re.compile(r"(\d[\s-]?\d{4}[\s-]?\d{5}[\s-]?\d{2}[\s-]?\d)")
 TAXID_PLAIN_RE = re.compile(r"\b\d{13}\b")
@@ -176,7 +180,7 @@ def _is_table_column_header(lines, i):
     return False
 
 
-def _best_match_on_line(rest, value_pattern, require_digit=False):
+def _best_match_on_line(rest, value_pattern, require_digit=False, max_start=None):
     """Pick the value on the rest-of-line after a keyword. For numeric
     patterns, Thai invoices usually print the actual amount at the end of
     the line (e.g. 'ภาษีมูลค่าเพิ่ม 7%   140.00'), so prefer the *last*
@@ -195,6 +199,12 @@ def _best_match_on_line(rest, value_pattern, require_digit=False):
     from a bilingual label's English line) can't be mistaken for the
     value."""
     matches = list(re.finditer(value_pattern, rest))
+    if max_start is not None:
+        # The caller is searching a window but handed us extra text past its
+        # end, so a value straddling the boundary stays whole — see the
+        # fallback search in _find_after_keyword. Keep matches that BEGIN
+        # inside the window; they may run past it.
+        matches = [mm for mm in matches if mm.start() < max_start]
     if not matches:
         return None
     if value_pattern is NUM_RE:
@@ -257,11 +267,18 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
                 val = _best_match_on_line(nxt, value_pattern, require_digit=require_digit)
                 if val:
                     return val
-    # fallback: search whole text within a character window after the keyword
+    # Fallback: search a character window after the keyword. The slice runs
+    # past the window on purpose — a value that starts inside it but ends
+    # outside used to be cut in half at the boundary, and the truncated
+    # remainder was returned as if it were the whole value. Confirmed live:
+    # invoice IV20250504-012 sat 50 characters after its "เลขที่" label, so
+    # the 60-character slice ended mid-number and the app recorded
+    # "IV20250504".
     for kw in keywords:
         for m in re.finditer(kw, text, re.IGNORECASE):
-            window_text = text[m.end():m.end() + window]
-            val = _best_match_on_line(window_text, value_pattern, require_digit=require_digit)
+            window_text = text[m.end():m.end() + window + _WINDOW_OVERRUN]
+            val = _best_match_on_line(window_text, value_pattern,
+                                      require_digit=require_digit, max_start=window)
             if val:
                 return val
     return None

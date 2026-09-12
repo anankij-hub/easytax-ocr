@@ -567,6 +567,64 @@ IV20250123-089
 """
 
 
+# Raw OCR text from the live app for the second บาบาร่า invoice
+# IV20250504-012 — ground truth. Everything read correctly EXCEPT the
+# invoice number, which came out "IV20250504": the number sits 50
+# characters after its bare "เลขที่" label (the branch/title lines are
+# emitted in between), and the keyword fallback's 60-character window ended
+# in the middle of it, so the truncated half was recorded as the value.
+REAL_BARBARA2_RAW_TEXT = """บริษัท บาบาร่า จำกัด (สำนักงานใหญ่)
+248/69 อาคารเฉลิมชัย ถนนรามคำแหง
+แขวงสวนหลวง กรุงเทพมหานคร 10250
+เลขประจำตัวผู้เสียภาษี 0153789056112
+โทร/แฟกซ์. 0-2719-367-01
+สาขาที่
+เลขที่
+GB
+ใบกำกับภาษี/ใบเสร็จรับเงิน
+TAXINVOICE/RECEIPT
+IV20250504-012
+ชื่อลูกค้า : บริษัท A จำกัด
+ที่อยู่ : 9/15 ถนนวิภาวดีรังสิต แขวงจอมพล
+เขตจตุจักร กรุงเทพมหานคร 10900
+เลขประจำตัวผู้เสียภาษี 0105569123456
+ต้นฉบับ-ลูกค้า
+วันที่
+24/05/2025
+ลำดับที่
+1
+แฟ้มใส่เอกสาร (A4)
+2
+รายการ
+กล่องใส่ของ (100*100*100 นิ้ว)
+จำนวน
+ราคา/หน่วย
+จำนวนเงิน
+20
+60
+1,200
+LO
+5
+365
+1,825
+หมายเหตุ
+ราคารวมสินค้า (บาท)
+ภาษีมูลค่าเพิ่ม/VAT
+ราคารวมทั้งสิ้น (บาท)
+2,827.10
+197.90
+3,025.00
+ในนามบริษัท บาบาร่า จำกัด
+ชำระเงินโดย เงินสด ( โอน O เช็ค
+(ลายเซ็นผู้ส่งของ)
+(ลายเซ็นผู้ส่งของ)
+(ผู้มีอำนาจลงนาม)
+วันที่
+วันที่
+วันที่
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -754,6 +812,24 @@ def main():
         "'จำนวนเงิน' with its own value is NOT a table header",
         extractor._is_table_column_header(["หมายเหตุ", "จำนวนเงิน 2,000.00", "ภาษี"], 1) is False,
     )
+
+    # regression: the second บาบาร่า invoice (see REAL_BARBARA2_RAW_TEXT) —
+    # a value that starts inside the keyword window but ends outside it must
+    # not be truncated at the boundary.
+    fields9 = extractor.extract_fields(REAL_BARBARA2_RAW_TEXT, ocr_confidence=90.0)
+    print("\n--- Real บาบาร่า #2 OCR text fields ---")
+    for k, v in fields9.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real barbara2: invoice_no = IV20250504-012 (not truncated to IV20250504)",
+        fields9["invoice_no"] == "IV20250504-012",
+    )
+    all_ok &= check("real barbara2: date = 2025-05-24", fields9["invoice_date_iso"] == "2025-05-24")
+    all_ok &= check("real barbara2: subtotal = 2827.1", fields9["subtotal"] == 2827.10)
+    all_ok &= check("real barbara2: vat = 197.9", fields9["vat"] == 197.90)
+    all_ok &= check("real barbara2: total = 3025.0", fields9["total"] == 3025.00)
+    all_ok &= check("real barbara2: buyer_name", fields9["buyer_name"] == "บริษัท A จำกัด")
+    all_ok &= check("real barbara2: not flagged for review", fields9["needs_review"] is False)
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
     # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the
