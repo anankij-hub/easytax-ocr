@@ -234,7 +234,7 @@
 
         <div class="form-field" style="margin-bottom:16px">
           <label>แก้ไขประเภท (ถ้า OCR จำแนกผิด)</label>
-          <select id="f_doc_type">
+          <select id="f_doc_type" onchange="updateTotalsHint()">
             <option value="เต็มรูป">เต็มรูป (หักภาษีซื้อได้)</option>
             <option value="ย่อ">ย่อ (หักภาษีซื้อไม่ได้)</option>
           </select>
@@ -263,17 +263,18 @@
           </div>
           <div class="form-field">
             <label>ยอดก่อนภาษี</label>
-            <input type="number" step="0.01" id="f_subtotal" />
+            <input type="number" step="0.01" id="f_subtotal" oninput="updateTotalsHint()" />
           </div>
           <div class="form-field">
             <label>VAT</label>
-            <input type="number" step="0.01" id="f_vat" />
+            <input type="number" step="0.01" id="f_vat" oninput="updateTotalsHint()" />
           </div>
           <div class="form-field">
             <label>ยอดรวม</label>
-            <input type="number" step="0.01" id="f_total" />
+            <input type="number" step="0.01" id="f_total" oninput="updateTotalsHint()" />
           </div>
         </div>
+        <div id="modalTotalsHint" class="reason-box" style="display:none; margin-top:12px; margin-bottom:0;"></div>
 
       </div>
     </div>
@@ -496,9 +497,7 @@ function openEditModal(inv) {
   banner.className = 'doctype-banner ' + (isFull ? 'full' : 'short');
   banner.textContent = isFull ? 'เต็มรูป — ใช้หักภาษีซื้อในการยื่น ภ.พ.30 ได้' : 'ย่อ — หักภาษีซื้อไม่ได้';
 
-  const reasonBox = document.getElementById('modalReasonBox');
-  reasonBox.innerHTML = inv.review_reason
-    ? `<div class="reason-box">เหตุผลจาก OCR: ${inv.review_reason}</div>` : '';
+  renderReviewBox(inv);
 
   modalRawText = inv.raw_text || '';
   document.getElementById('modalRawTextBox').style.display = 'none';
@@ -514,8 +513,81 @@ function openEditModal(inv) {
   document.getElementById('f_subtotal').value = inv.subtotal ?? '';
   document.getElementById('f_vat').value = inv.vat ?? '';
   document.getElementById('f_total').value = inv.total ?? '';
+  updateTotalsHint();
 
   document.getElementById('editModalOverlay').style.display = 'flex';
+}
+
+// Mirrors totals_mismatch_reason() in extractor.py — same rule, same
+// wording, so the hint shown while editing matches the warning stored on
+// the record. Keep the two in step if either changes.
+const VAT_RATE = 0.07;
+
+function fmtBaht(n) {
+  const s = Number(n).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2});
+  return s.endsWith('.00') ? s.slice(0, -3) : s;
+}
+
+function totalsMismatchReason(subtotal, vat, total) {
+  const has = x => x !== null && x !== undefined && !Number.isNaN(x);
+  if (has(subtotal) && has(vat)) {
+    const rateOk = subtotal > 0
+      ? Math.abs(vat / subtotal - VAT_RATE) <= 0.0015
+      : vat === 0;
+    if (!rateOk) {
+      const expected = Math.round(subtotal * VAT_RATE * 100) / 100;
+      return `⚠️ ยอดไม่สอดคล้องกัน: VAT ที่ระบุ (${fmtBaht(vat)} บาท) ไม่ตรงกับ 7% ` +
+             `ของยอดก่อนภาษี (ควรเป็น ${fmtBaht(expected)} บาท) — โปรดตรวจสอบ`;
+    }
+  }
+  if (has(subtotal) && has(vat) && has(total)
+      && Math.abs((subtotal + vat) - total) > Math.max(0.02, Math.abs(total) * 0.0005)) {
+    return `⚠️ ยอดไม่สอดคล้องกัน: ยอดก่อนภาษี + VAT (${fmtBaht(subtotal + vat)} บาท) ` +
+           `ไม่เท่ากับยอดรวม (${fmtBaht(total)} บาท) — โปรดตรวจสอบ`;
+  }
+  return null;
+}
+
+function numOrNull(id) {
+  const v = document.getElementById(id).value;
+  return v === '' ? null : Number(v);
+}
+
+// Re-check as the amounts are edited, so a correction makes the warning
+// disappear on the spot instead of only after saving.
+function updateTotalsHint() {
+  const box = document.getElementById('modalTotalsHint');
+  if (document.getElementById('f_doc_type').value === 'ย่อ') {
+    box.style.display = 'none';
+    return;
+  }
+  const msg = totalsMismatchReason(numOrNull('f_subtotal'), numOrNull('f_vat'), numOrNull('f_total'));
+  box.textContent = msg || '';
+  box.style.display = msg ? '' : 'none';
+}
+
+function renderReviewBox(inv) {
+  const box = document.getElementById('modalReasonBox');
+  if (!inv.needs_review && !inv.review_reason) { box.innerHTML = ''; return; }
+  const reason = inv.review_reason || 'รายการนี้ถูกทำเครื่องหมายว่าต้องตรวจสอบ';
+  box.innerHTML = `<div class="reason-box">
+      <div style="margin-bottom:10px">${reason}</div>
+      <button type="button" class="btn secondary" style="padding:4px 10px; font-size:12px;"
+              onclick="acceptInvoice()">✓ ยอมรับ — ทำเครื่องหมายว่าตรวจแล้ว</button>
+    </div>`;
+}
+
+// "ตรวจแล้ว ยอดนี้ถูกต้อง" — clears the flag without touching any figure,
+// so the record shows as ผ่าน (✓) alongside the rest.
+async function acceptInvoice() {
+  if (!modalInvoiceId) return;
+  await fetch(`/api/invoices/${modalInvoiceId}`, {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ needs_review: false, review_reason: null }),
+  });
+  closeEditModal();
+  loadInvoices();
+  if (activeTabName() === 'dashboard') loadDashboard();
 }
 
 function closeEditModal() {

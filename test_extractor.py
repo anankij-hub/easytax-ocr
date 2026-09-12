@@ -4,7 +4,17 @@ These feed in text that approximates what Tesseract would output for a
 Thai tax invoice, so we can validate the regex/field-extraction logic on
 its own. Run: python3 test_extractor.py
 """
+import sys
+
 import extractor
+
+# The Windows console defaults to cp874 here, which has Thai but no emoji —
+# printing the ⚠️ in a warning message would raise UnicodeEncodeError and
+# abort the run. Print UTF-8 and degrade anything unsupported instead.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, OSError):
+    pass
 
 FULL_INVOICE_TEXT = """บริษัท ปันปัน จำกัด
 ใบกำกับภาษี / ใบเสร็จรับเงิน (ต้นฉบับ)
@@ -601,7 +611,46 @@ def main():
     )
     all_ok &= check(
         "amounts that don't add up are flagged for review",
-        broken["needs_review"] and "ไม่เท่ากับยอดรวม" in (broken["review_reason"] or ""),
+        broken["needs_review"] and "ยอดไม่สอดคล้องกัน" in (broken["review_reason"] or ""),
+    )
+    print(f"  warning text: {broken['review_reason']}")
+
+    # the warning names the actual figures, including what the VAT should be
+    all_ok &= check(
+        "warning states the VAT that was read and the 7% figure expected",
+        extractor.totals_mismatch_reason(1900.0, 140.0, 2040.0)
+        == "⚠️ ยอดไม่สอดคล้องกัน: VAT ที่ระบุ (140 บาท) ไม่ตรงกับ 7% ของยอดก่อนภาษี "
+           "(ควรเป็น 133 บาท) — โปรดตรวจสอบ",
+    )
+    all_ok &= check(
+        "warning when the three don't add up",
+        extractor.totals_mismatch_reason(2000.0, 140.0, 2500.0)
+        == "⚠️ ยอดไม่สอดคล้องกัน: ยอดก่อนภาษี + VAT (2,140 บาท) ไม่เท่ากับยอดรวม "
+           "(2,500 บาท) — โปรดตรวจสอบ",
+    )
+    all_ok &= check(
+        "consistent amounts produce no warning",
+        extractor.totals_mismatch_reason(2000.0, 140.0, 2140.0) is None,
+    )
+
+    # regression: an invoice read correctly whose ยอดรวม OCR missed. The
+    # total is derived and checks out, so the record must come back CLEAN —
+    # a derived-but-verified figure is not something to warn about.
+    derived_total = extractor.extract_fields(
+        "บริษัท โจธนารักษ์ แพตเดอร์สัน จำกัด (สำนักงานใหญ่)\n"
+        "เลขประจำตัวผู้เสียภาษี 0105576890143\nใบกำกับภาษี/ใบเสร็จรับเงิน\n"
+        "ชื่อลูกค้า/Customer Name : บริษัท เอ จำกัด\n"
+        "เลขที่ใบกำกับภาษี IV6800107-054\nวันที่ 07/01/68\n"
+        "ราคารวมสินค้า (บาท) 2,000.-\nภาษีมูลค่าเพิ่ม (VAT) 7% 140.-\n",
+        ocr_confidence=92.0,
+    )
+    all_ok &= check(
+        "derived total, everything consistent -> no review flag",
+        derived_total["needs_review"] is False and derived_total["total"] == 2140.0,
+    )
+    all_ok &= check(
+        "bilingual label remnant stripped from buyer name",
+        derived_total["buyer_name"] == "บริษัท เอ จำกัด",
     )
 
     # multi-invoice split

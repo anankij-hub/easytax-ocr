@@ -469,6 +469,11 @@ def _clean_buyer_value(val):
     and cut it at the next field's label if OCR merged two boxes together."""
     val = (val or "").strip()
     val = re.sub(r"^[:：\-–]+\s*", "", val).strip()
+    # A bilingual label pair prints both halves before the value
+    # ("ชื่อลูกค้า/Customer Name : บริษัท เอ จำกัด"). The keyword match only
+    # consumes the Thai half, leaving "/Customer Name : " glued to the front
+    # of the name — drop a leading run of Latin label words up to its colon.
+    val = re.sub(r"^[/|\-–]?\s*[A-Za-z][A-Za-z.\s]{0,30}[:：]\s*", "", val).strip()
     m = OTHER_FIELD_LABEL_RE.search(val)
     if m and m.start() > 0:
         val = val[:m.start()]
@@ -647,6 +652,31 @@ def _vat_rate_ok(subtotal, vat):
     return abs(vat / subtotal - VAT_RATE) <= _RATE_TOL
 
 
+def _fmt_baht(n):
+    """2,571.03 / 140 — show satang only when there are any."""
+    if n is None:
+        return "—"
+    s = f"{round(n, 2):,.2f}"
+    return s[:-3] if s.endswith(".00") else s
+
+
+def totals_mismatch_reason(subtotal, vat, total):
+    """The warning shown when the three amounts contradict each other, with
+    the actual figures in it so the user can see what to fix without
+    reopening the document. Returns None when they agree (or when there
+    isn't enough to check), so a correctly-read invoice stays clean — a
+    figure that reconcile_totals derived and verified is not a problem and
+    must not raise a warning of its own."""
+    if subtotal is not None and vat is not None and not _vat_rate_ok(subtotal, vat):
+        expected = round(subtotal * VAT_RATE, 2)
+        return (f"⚠️ ยอดไม่สอดคล้องกัน: VAT ที่ระบุ ({_fmt_baht(vat)} บาท) ไม่ตรงกับ 7% "
+                f"ของยอดก่อนภาษี (ควรเป็น {_fmt_baht(expected)} บาท) — โปรดตรวจสอบ")
+    if None not in (subtotal, vat, total) and not _amounts_balance(subtotal, vat, total):
+        return (f"⚠️ ยอดไม่สอดคล้องกัน: ยอดก่อนภาษี + VAT ({_fmt_baht(subtotal + vat)} บาท) "
+                f"ไม่เท่ากับยอดรวม ({_fmt_baht(total)} บาท) — โปรดตรวจสอบ")
+    return None
+
+
 def reconcile_totals(subtotal, vat, total):
     """Cross-check ยอดก่อนภาษี / VAT / ยอดรวม against each other and repair
     one of them when the other two agree.
@@ -662,31 +692,28 @@ def reconcile_totals(subtotal, vat, total):
 
     Only rewrites a value when a candidate set both balances AND has a
     correct 7% rate, so a guess can't quietly replace what the document
-    actually says. Returns (subtotal, vat, total, note) where note is None
-    if nothing was wrong, or a short Thai explanation for the review log."""
+    actually says. Returns (subtotal, vat, total). A set it could not
+    reconcile is returned untouched — totals_mismatch_reason then turns it
+    into the warning the user sees."""
     if _amounts_balance(subtotal, vat, total) and _vat_rate_ok(subtotal, vat):
-        return subtotal, vat, total, None
+        return subtotal, vat, total
 
     # Each candidate trusts two of the three figures and derives the third.
     candidates = []
     if vat is not None and total is not None:
-        candidates.append((round(total - vat, 2), vat, total, "คำนวณยอดก่อนภาษีจากยอดรวม - VAT"))
+        candidates.append((round(total - vat, 2), vat, total))
     if subtotal is not None and total is not None:
-        candidates.append((subtotal, round(total - subtotal, 2), total, "คำนวณ VAT จากยอดรวม - ยอดก่อนภาษี"))
+        candidates.append((subtotal, round(total - subtotal, 2), total))
     if subtotal is not None and vat is not None:
-        candidates.append((subtotal, vat, round(subtotal + vat, 2), "คำนวณยอดรวมจากยอดก่อนภาษี + VAT"))
+        candidates.append((subtotal, vat, round(subtotal + vat, 2)))
 
-    for s, v, t, note in candidates:
+    for s, v, t in candidates:
         if _amounts_balance(s, v, t) and _vat_rate_ok(s, v):
-            # Nothing actually changed — the input was already consistent
-            # on this pairing, just incomplete.
-            changed = (s != subtotal) or (v != vat) or (t != total)
-            return s, v, t, (note if changed else None)
+            return s, v, t
 
     # Two of the three are missing, or nothing adds up — leave the figures
     # exactly as OCR read them and let the reviewer decide.
-    return subtotal, vat, total, ("ยอดก่อนภาษี + VAT ไม่เท่ากับยอดรวม"
-                                  if None not in (subtotal, vat, total) else None)
+    return subtotal, vat, total
 
 
 def classify_doc_type(fields):
@@ -718,6 +745,13 @@ def build_review_reasons(fields):
     # loud — usually OCR just missed the name and the user can type it in.
     if fields.get("_has_tax_invoice_marker") and not fields.get("buyer_name"):
         reasons.append("ไม่พบชื่อผู้ซื้อ (ถูกจัดเป็นใบย่อ หักภาษีซื้อไม่ได้)")
+    # ใบย่อ has no subtotal/VAT to check against each other by law
+    if fields.get("doc_type") != "ย่อ":
+        mismatch = totals_mismatch_reason(
+            fields.get("subtotal"), fields.get("vat"), fields.get("total")
+        )
+        if mismatch:
+            reasons.append(mismatch)
     if fields.get("ocr_confidence") is not None and fields["ocr_confidence"] < 60:
         reasons.append(f"ความมั่นใจ OCR ต่ำ ({fields['ocr_confidence']:.0f}%)")
     return reasons
@@ -922,7 +956,7 @@ def extract_fields(text, ocr_confidence=None):
     # The three amounts are extracted independently above, each by its own
     # keyword search — cross-check them against each other before they get
     # recorded. See reconcile_totals.
-    subtotal, vat, total, totals_note = reconcile_totals(subtotal, vat, total)
+    subtotal, vat, total = reconcile_totals(subtotal, vat, total)
 
     fields = {
         "invoice_no": invoice_no,
@@ -948,11 +982,6 @@ def extract_fields(text, ocr_confidence=None):
         fields["vat"] = None
 
     reasons = build_review_reasons(fields)
-    # A repaired or irreconcilable set of amounts is worth telling the user
-    # about — either a figure on screen is now a computed one rather than
-    # what OCR read, or the three don't add up and someone must look.
-    if totals_note and fields["doc_type"] != "ย่อ":
-        reasons.append(totals_note)
     fields["needs_review"] = bool(reasons)
     fields["review_reason"] = "; ".join(reasons) if reasons else None
     return fields
