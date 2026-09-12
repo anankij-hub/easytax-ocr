@@ -506,6 +506,67 @@ IV6800413-039
 """
 
 
+# Raw OCR text from the live app for the บาบาร่า invoice IV20250123-089 —
+# ground truth. All three amounts were wrong or missing, from two causes:
+#   - Vision dropped the MAI THO from the grand-total label, reading
+#     "ราคารวมทั้งสิน" for "ราคารวมทั้งสิ้น". That matched no keyword, so the
+#     totals block had 2 labels against 3 values and refused to pair.
+#   - Falling back to keyword search, the last-resort subtotal keyword
+#     "จำนวนเงิน" matched the items-table's own column heading (alone on its
+#     line in a column-major read) and took the row number "1" below it.
+# VAT then came from the line after its label — the SUBTOTAL's value.
+REAL_BARBARA_RAW_TEXT = """บริษัท บาบาร่า จำกัด (สำนักงานใหญ่)
+248/69 อาคารเฉลิมชัย ถนนรามคำแหง
+แขวงสวนหลวง กรุงเทพมหานคร 10250
+เลขประจำตัวผู้เสียภาษี 0153789056112
+โทร/แฟกซ์. 0-2719-367-01
+สาขาที่
+JB
+ใบกำกับภาษี/ใบเสร็จรับเงิน
+TAXINVOICE/RECEIPT
+เลขที่
+IV20250123-089
+ชื่อลูกค้า : บริษัท A จำกัด
+:
+ที่อยู่ : 9/15 ถนนวิภาวดีรังสิต แขวงจอมพล
+เขตจตุจักร กรุงเทพมหานคร 10900
+เลขประจำตัวผู้เสียภาษี 0105569123456
+ต้นฉบับ-ลูกค้า
+วันที่
+22/01/2025
+ลำดับที่
+รายการ
+จำนวน
+ราคา/หน่วย
+จำนวนเงิน
+1
+น้ำมันพืช (1.5L)
+5
+48
+240
+2
+ปลากระป๋อง (1*24 กป)
+1
+120
+120
+หมายเหตุ
+ราคารวมสินค้า (บาท)
+ภาษีมูลค่าเพิ่ม/VAT
+ราคารวมทั้งสิน (บาท)
+336.45
+23.55
+360.00
+ในนามบริษัท บาบาร่า จำกัด
+ชำระเงินโดย เงินสด ( โอน O เช็ค
+(ลายเซ็นผู้ส่งของ)
+(ลายเซ็นผู้ส่งของ)
+(ผู้มีอำนาจลงนาม)
+วันที่
+วันที่
+วันที่
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -655,6 +716,44 @@ def main():
     all_ok &= check("'1,300,-' parses as 1300.0", extractor._clean_number("1,300,-") == 1300.0)
     all_ok &= check("'2,571.03' still parses", extractor._clean_number("2,571.03") == 2571.03)
     all_ok &= check("'-50.00' is still negative", extractor._clean_number("-50.00") == -50.0)
+
+    # regression: the ACTUAL raw OCR text for the บาบาร่า invoice (see comment
+    # on REAL_BARBARA_RAW_TEXT) — a dropped tone mark on the grand-total
+    # label plus an items-table column heading posing as a subtotal label.
+    fields8 = extractor.extract_fields(REAL_BARBARA_RAW_TEXT, ocr_confidence=90.0)
+    print("\n--- Real บาบาร่า OCR text fields ---")
+    for k, v in fields8.items():
+        print(f"  {k}: {v}")
+    all_ok &= check("real barbara: subtotal = 336.45 (not 1)", fields8["subtotal"] == 336.45)
+    all_ok &= check("real barbara: vat = 23.55 (not 336.45)", fields8["vat"] == 23.55)
+    all_ok &= check("real barbara: total = 360.0 (was missing)", fields8["total"] == 360.0)
+    all_ok &= check("real barbara: buyer_name", fields8["buyer_name"] == "บริษัท A จำกัด")
+    all_ok &= check("real barbara: invoice_no", fields8["invoice_no"] == "IV20250123-089")
+    all_ok &= check("real barbara: date = 2025-01-22", fields8["invoice_date_iso"] == "2025-01-22")
+    all_ok &= check("real barbara: classified เต็มรูป", fields8["doc_type"] == "เต็มรูป")
+    all_ok &= check("real barbara: not flagged for review", fields8["needs_review"] is False)
+
+    # a dropped tone mark on ทั้งสิ้น must not hide the grand total
+    all_ok &= check(
+        "'ราคารวมทั้งสิน' (no tone mark) still classifies as the total",
+        extractor._classify_totals_label("ราคารวมทั้งสิน (บาท)") == "total",
+    )
+    all_ok &= check(
+        "'ราคารวมทั้งสิ้น' (correct spelling) classifies as the total",
+        extractor._classify_totals_label("ราคารวมทั้งสิ้น (บาท)") == "total",
+    )
+
+    # a bare "จำนวนเงิน" among other column headings is a table heading;
+    # standing alone next to its own figure it is still a subtotal label
+    header_lines = ["ลำดับที่", "รายการ", "จำนวน", "ราคา/หน่วย", "จำนวนเงิน", "1"]
+    all_ok &= check(
+        "bare 'จำนวนเงิน' in a column-heading run is a table header",
+        extractor._is_table_column_header(header_lines, 4),
+    )
+    all_ok &= check(
+        "'จำนวนเงิน' with its own value is NOT a table header",
+        extractor._is_table_column_header(["หมายเหตุ", "จำนวนเงิน 2,000.00", "ภาษี"], 1) is False,
+    )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
     # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the

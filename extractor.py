@@ -66,8 +66,13 @@ SUBTOTAL_KEYWORDS = [
     r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า", r"ราคารวมสินค้า",
     r"รวมเป็นเงิน", r"รวมเงิน", r"After\s*Discount", r"Sub\s*Total", r"จำนวนเงิน",
 ]
+# "สิ้?น" — the MAI THO on สิ้น is optional on purpose. Confirmed on a real
+# invoice: Vision dropped the tone mark and read the grand-total label as
+# "ราคารวมทั้งสิน", which matched no keyword at all, so the totals block
+# failed to pair up and the amounts came out of unrelated table cells.
+# Thai tone marks are small and the first thing a scan loses.
 TOTAL_KEYWORDS = [
-    r"จำนวนเงิน(?:รวม)?ทั้งสิ้น", r"จำนวนเงินรวมสุทธิ", r"รวมทั้งสิ้น", r"ยอดรวมสุทธิ", r"ยอดรวม",
+    r"จำนวนเงิน(?:รวม)?ทั้งสิ้?น", r"จำนวนเงินรวมสุทธิ", r"รวมทั้งสิ้?น", r"ยอดรวมสุทธิ", r"ยอดรวม",
     r"Grand\s*Total", r"Total\s*Amount", r"Total",
 ]
 # "ลูกค้า" carries two negative lookbehinds so it matches the buyer-name
@@ -96,7 +101,7 @@ RECEIPT_MARKER = r"ใบเสร็จรับเงิน"
 # scanner can lock onto this row plus the first line item's numbers and
 # return a completely wrong (but internally consistent) result.
 TABLE_HEADER_LINE_RE = re.compile(
-    r"ลำดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย|ราคาต่อหน่วย|รายการสินค้า|จำนวนเงินรวม(?!สุทธิ|ทั้งสิ้น)|"
+    r"ลำดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย|ราคาต่อหน่วย|รายการสินค้า|จำนวนเงินรวม(?!สุทธิ|ทั้งสิ้?น)|"
     r"PRODUCT\s*CODE|DESCRIPTION|QUANTITY|UNIT\s*PRICE|ITEM\s*DISCOUNT|TOTAL\s*AMOUNT",
     re.IGNORECASE,
 )
@@ -138,6 +143,37 @@ def _clean_number(s):
         return float(s)
     except ValueError:
         return None
+
+
+# One column heading of an items table, alone on its line — what a
+# column-major OCR read produces instead of one "ลำดับ รายการ จำนวน ..."
+# header row. TABLE_HEADER_LINE_RE can't catch these on its own because
+# several are ordinary words that also label real fields.
+COLUMN_HEADER_WORD_RE = re.compile(
+    r"^(?:ลำดับ(?:ที่)?|ที่|รหัสสินค้า|รหัส|รายการ(?:สินค้า)?(?:\s*/\s*บริการ)?|รายละเอียด|"
+    r"จำนวน|จำนวนเงิน|หน่วย|ราคา(?:\s*/\s*หน่วย|ต่อหน่วย)?|ราคาสุทธิ|ส่วนลด|มูลค่า|"
+    r"No\.?|Item|Qty|Unit|Price|Amount|Description|Discount|Total)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_table_column_header(lines, i):
+    """True when line i is an items-table column heading rather than a field
+    label. A bare "จำนวนเงิน" is genuinely ambiguous — on some receipts it
+    labels the pre-tax subtotal (which is why it's in SUBTOTAL_KEYWORDS),
+    but in a column-major read of an items table it's the last column's
+    heading, with the first row's line number on the next line. Confirmed
+    live: that "1" was reported as ยอดก่อนภาษี.
+
+    A heading never stands alone, so require a neighbour that is also a
+    bare heading word — a real "จำนวนเงิน 2,000.00" totals line has its
+    value on the line and no such company."""
+    if not COLUMN_HEADER_WORD_RE.match(lines[i].strip()):
+        return False
+    for j in (i - 2, i - 1, i + 1, i + 2):
+        if 0 <= j < len(lines) and j != i and COLUMN_HEADER_WORD_RE.match(lines[j].strip()):
+            return True
+    return False
 
 
 def _best_match_on_line(rest, value_pattern, require_digit=False):
@@ -199,7 +235,8 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
     lines = text.splitlines()
     for kw in keywords:
         for i, line in enumerate(lines):
-            if skip_header_lines and TABLE_HEADER_LINE_RE.search(line):
+            if skip_header_lines and (TABLE_HEADER_LINE_RE.search(line)
+                                      or _is_table_column_header(lines, i)):
                 continue
             m = re.search(kw, line, re.IGNORECASE)
             if not m:
@@ -212,7 +249,8 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
                 if i + j >= len(lines):
                     break
                 nxt = lines[i + j]
-                if skip_header_lines and TABLE_HEADER_LINE_RE.search(nxt):
+                if skip_header_lines and (TABLE_HEADER_LINE_RE.search(nxt)
+                                          or _is_table_column_header(lines, i + j)):
                     continue
                 if nxt.strip().lower().rstrip(".") in _LOOKAHEAD_LABEL_BLOCKLIST:
                     continue
