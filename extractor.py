@@ -70,8 +70,12 @@ TOTAL_KEYWORDS = [
     r"จำนวนเงิน(?:รวม)?ทั้งสิ้น", r"จำนวนเงินรวมสุทธิ", r"รวมทั้งสิ้น", r"ยอดรวมสุทธิ", r"ยอดรวม",
     r"Grand\s*Total", r"Total\s*Amount", r"Total",
 ]
+# "ลูกค้า" carries two negative lookbehinds so it matches the buyer-name
+# label ("ชื่อลูกค้า") but NOT a customer *code* field ("รหัสลูกค้า",
+# "เลขที่ลูกค้า") — those hold a short numeric/alphanumeric code, which the
+# forward search would otherwise happily return as the buyer's name.
 BUYER_KEYWORDS = [
-    r"นามผู้ซื้อ", r"ชื่อผู้ซื้อ", r"ลูกค้า", r"Customer", r"Bill\s*To",
+    r"นามผู้ซื้อ", r"ชื่อผู้ซื้อ", r"(?<!รหัส)(?<!เลขที่)ลูกค้า", r"Customer", r"Bill\s*To",
 ]
 # NOTE: "Buyer Name" is intentionally NOT in this forward-search list — on
 # a real invoice it was OCR'd sitting AFTER the buyer name value instead of
@@ -331,8 +335,60 @@ def _looks_like_value_line(line):
     return bool(line) and line.lower() not in _LOOKAHEAD_LABEL_BLOCKLIST and len(line) >= 3
 
 
+# Labels that belong to some OTHER field. Two uses when hunting for the
+# buyer name: (1) a boxed layout often gets OCR'd with the buyer box and
+# the neighbouring document box merged onto one line ("ชื่อลูกค้า : บริษัท A
+# จำกัด  เลขที่ใบกำกับภาษี IV0100168-99") — everything from the next label
+# onward must be cut off; (2) when the value isn't on the label's own line
+# and we scan the following lines, a line that *starts* with one of these
+# is a different field (the buyer's address, the invoice number, ...), not
+# the buyer's name.
+OTHER_FIELD_LABEL_RE = re.compile(
+    r"เลขที่ใบกำกับภาษี|เลขที่ใบเสร็จ|เลขที่เอกสาร|เลขที่ใบสั่ง|ใบสั่งซื้อเลขที่|ใบสั่งขายเลขที่|"
+    r"วันที่|วันครบกำหนด|เลขประจำตัวผู้เสียภาษี|เลขผู้เสียภาษี|ที่อยู่|โทร|แฟกซ์|"
+    r"รหัสพนักงาน|รหัสลูกค้า|ขนส่งโดย|หน้า\s*\d|"
+    r"Tax\s*ID|Invoice\s*No|Document\s*(?:No|Date|Ref)|Address|Tel\b|Fax|Page\s*\d",
+    re.IGNORECASE,
+)
+
+# A captured buyer name that is nothing but digits/punctuation — a line
+# number from the items table ("1"), a salesperson code ("001-H"), a page
+# marker ("1/1"), a bare taxpayer ID — is never a real name. This was a
+# live bug: the value pattern used for names ([^\n]{3,60}) counts the
+# surrounding whitespace toward its 3-character minimum, so a padded
+# column cell like "  1  " passed the length check and then stripped down
+# to "1", which is what ended up in the ชื่อผู้ซื้อ box on screen.
+_BUYER_JUNK_VALUE_RE = re.compile(r"^[\d\s,.:/\-–#()%]+$")
+
+
+def _clean_buyer_value(val):
+    """Strip separator punctuation off the front of a captured buyer name
+    and cut it at the next field's label if OCR merged two boxes together."""
+    val = (val or "").strip()
+    val = re.sub(r"^[:：\-–]+\s*", "", val).strip()
+    m = OTHER_FIELD_LABEL_RE.search(val)
+    if m and m.start() > 0:
+        val = val[:m.start()]
+    return val.strip().strip(":：-–").strip()
+
+
+def _is_plausible_buyer_name(val):
+    """A buyer name must be real text: at least two consecutive letters and
+    not just numbers/punctuation, not a bare label word. Rejecting instead
+    of returning junk matters because the caller keeps searching — a bad
+    candidate on the label's own line must not stop the scan before the
+    line that actually holds the name."""
+    if not val or len(val) < 3:
+        return False
+    if val.lower().rstrip(".") in _LOOKAHEAD_LABEL_BLOCKLIST:
+        return False
+    if _BUYER_JUNK_VALUE_RE.match(val):
+        return False
+    return bool(re.search(r"[ก-๙A-Za-z]{2,}", val))
+
+
 def extract_buyer_name(text):
-    lines = text.splitlines()
+    lines = normalize_thai_text(text or "").splitlines()
     # Reversed-order case, confirmed on a real bilingual invoice: OCR
     # printed the buyer name value BEFORE its "Buyer Name" English
     # sub-label (with the Thai label above the value garbled beyond
@@ -352,15 +408,50 @@ def extract_buyer_name(text):
             if not prev_is_label and _looks_like_value_line(prev) and re.search(r"[ก-๙]", prev):
                 return prev
 
-    val = _find_after_keyword(text, BUYER_KEYWORDS, value_pattern=r"[^\n]{3,60}")
-    if not val:
-        return None
-    val = val.strip()
-    # The keyword match only skips past the label itself (e.g. "ลูกค้า"), so
-    # a layout like "ชื่อลูกค้า : บริษัท A จำกัด" leaves a leading ":" in the
-    # captured value — strip that (and other separator punctuation) off.
-    val = re.sub(r"^[:：\-–]\s*", "", val).strip()
-    return val or None
+    # Forward search, keyword by keyword in priority order (same ordering
+    # rationale as _find_after_keyword). Done here rather than through
+    # _find_after_keyword because a name needs validating — that helper's
+    # generic "first regex match wins" would return a table cell like "1".
+    for kw in BUYER_KEYWORDS:
+        for i, line in enumerate(lines):
+            if TABLE_HEADER_LINE_RE.search(line):
+                continue
+            m = re.search(kw, line, re.IGNORECASE)
+            if not m:
+                continue
+            # An English sub-label right after the keyword ("Customer Code",
+            # "ลูกค้า No.") means this is a code field, not the name field.
+            if re.match(r"\s*(?:Code|No\.?|ID|Number)\b", line[m.end():], re.IGNORECASE):
+                continue
+            cand = _clean_buyer_value(line[m.end():])
+            if _is_plausible_buyer_name(cand):
+                return cand
+            # Value not on the label's line — scan the following few. The
+            # window is deliberately wider than the generic 2-line one in
+            # _find_after_keyword: when a boxed layout is OCR'd column-major
+            # the name can sit several lines below its label, behind a run
+            # of other labels and stray table cells. Lines that are clearly
+            # not a value (another field's label, an English sub-label, an
+            # items-table header) are skipped without consuming the window,
+            # and an implausible candidate no longer ends the search.
+            for j in range(1, 6):
+                if i + j >= len(lines):
+                    break
+                nxt = lines[i + j].strip()
+                if not nxt:
+                    continue
+                if TABLE_HEADER_LINE_RE.search(nxt):
+                    continue
+                if nxt.lower().rstrip(".") in _LOOKAHEAD_LABEL_BLOCKLIST:
+                    continue
+                if OTHER_FIELD_LABEL_RE.match(nxt):
+                    continue
+                if any(re.search(k, nxt, re.IGNORECASE) for k in BUYER_KEYWORDS):
+                    continue  # the label pair's other half, not the value
+                cand = _clean_buyer_value(nxt)
+                if _is_plausible_buyer_name(cand):
+                    return cand
+    return None
 
 
 def classify_doc_type(fields):
@@ -386,6 +477,12 @@ def build_review_reasons(fields):
         reasons.append("ไม่พบเลขประจำตัวผู้เสียภาษีผู้ขาย")
     if fields.get("total") is None:
         reasons.append("ไม่พบยอดรวม")
+    # A document that looks like a full ใบกำกับภาษี in every other respect
+    # but has no buyer name gets classified ย่อ (VAT not deductible). That's
+    # a big downgrade to make silently on one missing field, so say it out
+    # loud — usually OCR just missed the name and the user can type it in.
+    if fields.get("_has_tax_invoice_marker") and not fields.get("buyer_name"):
+        reasons.append("ไม่พบชื่อผู้ซื้อ (ถูกจัดเป็นใบย่อ หักภาษีซื้อไม่ได้)")
     if fields.get("ocr_confidence") is not None and fields["ocr_confidence"] < 60:
         reasons.append(f"ความมั่นใจ OCR ต่ำ ({fields['ocr_confidence']:.0f}%)")
     return reasons

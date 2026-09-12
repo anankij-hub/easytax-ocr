@@ -232,6 +232,56 @@ GRAND TOTAL AMOUNT
 REAL_MOSHI_RAW_TEXT = REAL_MOSHI_RAW_TEXT.replace("ำ", "ํา")
 
 
+# Ways the buyer-name field (ชื่อลูกค้า / ชื่อผู้ซื้อ) comes out of Google
+# Vision on a boxed Thai invoice. Google Vision reads a boxed layout
+# column-major fairly often, which scatters a field's label away from its
+# value and drops unrelated table cells in between — all of these used to
+# return junk (a table line number, a salesperson code) or nothing.
+_BUYER = "บริษัท A จำกัด"
+BUYER_NAME_CASES = [
+    (
+        "label alone, items-table cells before the value",
+        "บริษัท รจนา จำกัด (สำนักงานใหญ่)\nใบกำกับภาษี/ ใบเสร็จรับเงิน\n"
+        "ชื่อลูกค้า :\nลำดับ\nรหัสสินค้า\n1\n001-001\nบริษัท A จำกัด\n",
+        _BUYER,
+    ),
+    (
+        "buyer box merged onto one line with the document box",
+        "บริษัท รจนา จำกัด (สำนักงานใหญ่)\n"
+        "ชื่อลูกค้า : บริษัท A จำกัด เลขที่ใบกำกับภาษี IV0100168-99\n"
+        "ที่อยู่ : 99/15 ถนนวิภาวดีรังสิต วันที่ใบกำกับภาษี 01/01/68\n",
+        _BUYER,
+    ),
+    (
+        "whitespace-padded numeric cell right after the label",
+        "บริษัท รจนา จำกัด\nชื่อลูกค้า\n  1\nบริษัท A จำกัด\n",
+        _BUYER,
+    ),
+    (
+        "รหัสลูกค้า (customer code) must not win over ชื่อลูกค้า",
+        "บริษัท รจนา จำกัด\nรหัสลูกค้า 1\nชื่อลูกค้า : บริษัท A จำกัด\n",
+        _BUYER,
+    ),
+    (
+        "address line sits between the label and the name",
+        "บริษัท รจนา จำกัด\nชื่อลูกค้า :\n"
+        "ที่อยู่ : 99/15 ถนนวิภาวดีรังสิต แขวงจอมพล\nบริษัท A จำกัด\n",
+        _BUYER,
+    ),
+    (
+        "page marker and salesperson code as noise",
+        "บริษัท รจนา จำกัด (สำนักงานใหญ่)\nหน้า 1/1\n"
+        "ชื่อลูกค้า\n1/1\n001-H\nบริษัท A จำกัด\n",
+        _BUYER,
+    ),
+    (
+        "no buyer field at all -> None, never a stray number",
+        "ร้านจรรยา\nใบเสร็จรับเงิน\nวันที่ 23/07/2025\nรวมทั้งสิ้น 1,050.00\n",
+        None,
+    ),
+]
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -323,6 +373,29 @@ def main():
     all_ok &= check("real moshi: subtotal = 2626.17 (post-discount)", fields5["subtotal"] == 2626.17)
     all_ok &= check("real moshi: vat = 183.83 (not 2812)", fields5["vat"] == 183.83)
     all_ok &= check("real moshi: total = 2810.0 (not 1)", fields5["total"] == 2810.0)
+
+    # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
+    # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the
+    # items table instead of the ชื่อลูกค้า value. Each case below is a way a
+    # boxed Thai invoice gets OCR'd that used to yield junk or nothing.
+    print("\n--- Buyer name edge cases ---")
+    for label, text, expected in BUYER_NAME_CASES:
+        got = extractor.extract_buyer_name(text)
+        print(f"  {label}: {got!r}")
+        all_ok &= check(f"buyer name — {label}", got == expected)
+
+    # a missing buyer name silently downgrades a full ใบกำกับภาษี to ย่อ
+    # (VAT not deductible), so it has to show up as a review reason
+    no_buyer = extractor.extract_fields(
+        "บริษัท รจนา จำกัด\nใบกำกับภาษี/ใบเสร็จรับเงิน\n"
+        "เลขประจำตัวผู้เสียภาษี 0105558887774\nเลขที่ใบกำกับภาษี IV0100168-99\n"
+        "วันที่ 01/01/68\nรวมทั้งสิ้น 4,745.00\n",
+        ocr_confidence=90.0,
+    )
+    all_ok &= check(
+        "missing buyer name is flagged for review",
+        no_buyer["needs_review"] and "ชื่อผู้ซื้อ" in (no_buyer["review_reason"] or ""),
+    )
 
     # multi-invoice split
     combined = FULL_INVOICE_TEXT + "\n" + FULL_INVOICE_TEXT
