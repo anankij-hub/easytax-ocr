@@ -360,6 +360,52 @@ OTHER_FIELD_LABEL_RE = re.compile(
 # to "1", which is what ended up in the ชื่อผู้ซื้อ box on screen.
 _BUYER_JUNK_VALUE_RE = re.compile(r"^[\d\s,.:/\-–#()%]+$")
 
+# The document's own header furniture — the title, the branch-of-issue line
+# ("สาขาที่ออก ใบกำกับภาษี/ใบเสร็จรับเงิน : สำนักงานใหญ่"), the page marker.
+# Confirmed on the รจนา invoice from the live app: Google Vision reads that
+# boxed layout column-major, so the top-right header text is emitted
+# BETWEEN the "ชื่อลูกค้า" label and its value — a forward scan then reads
+# the header as the buyer's name. None of this text is ever part of a name,
+# so a line containing it is never a candidate.
+DOC_FURNITURE_RE = re.compile(
+    r"ใบกำกับภาษี|ใบเสร็จรับเงิน|ใบแจ้งหนี้|ใบส่งของ|ต้นฉบับ|สำเนา|สาขาที่ออก|หน้า\s*\d|"
+    r"TAX\s*INVOICE|RECEIPT|INVOICE|ORIGINAL|COPY|Page\s*\d",
+    re.IGNORECASE,
+)
+
+# What a buyer actually is on a Thai invoice: a juristic person, a shop, a
+# titled individual, or a public body. Used to PREFER a candidate rather
+# than to require one — when several lines in the window could be the
+# value, the one that reads like an entity name is the right answer, and
+# for the รจนา invoice this is what separates "บริษัท A จำกัด" from the
+# header line sitting above it in the OCR stream.
+BUYER_ENTITY_HINT_RE = re.compile(
+    r"บริษัท|ห้างหุ้นส่วน|หจก|บจก|ร้าน|คุณ|นาย|นาง|นางสาว|ด\.ช\.|ด\.ญ\.|คณะ|มหาวิทยาลัย|"
+    r"วิทยาลัย|โรงเรียน|โรงพยาบาล|สำนักงาน|องค์การ|องค์กร|กรม|กระทรวง|เทศบาล|สหกรณ์|"
+    r"มูลนิธิ|สมาคม|Co\.,?\s*Ltd|Ltd|P(?:ublic)?\s*Co|Company|Corp|Foundation|University|School",
+    re.IGNORECASE,
+)
+
+
+def _norm_name(name):
+    """Squash a name down for comparison — spaces and bracketed suffixes
+    like '(สำนักงานใหญ่)' vary between how the seller's name is printed in
+    the letterhead and how it appears elsewhere on the page."""
+    if not name:
+        return ""
+    return re.sub(r"[\s()（）.,\-–:]+", "", name).lower()
+
+
+def _is_seller_name(val, seller_name):
+    """The buyer is never the seller. OCR that scrambles reading order can
+    put the letterhead company name inside the buyer label's search window,
+    and accepting it would wrongly certify the document as เต็มรูป with the
+    wrong party recorded as the buyer."""
+    a, b = _norm_name(val), _norm_name(seller_name)
+    if not a or not b:
+        return False
+    return a == b or (len(a) >= 8 and len(b) >= 8 and (a in b or b in a))
+
 
 def _clean_buyer_value(val):
     """Strip separator punctuation off the front of a captured buyer name
@@ -384,10 +430,30 @@ def _is_plausible_buyer_name(val):
         return False
     if _BUYER_JUNK_VALUE_RE.match(val):
         return False
+    if DOC_FURNITURE_RE.search(val):
+        return False
     return bool(re.search(r"[ก-๙A-Za-z]{2,}", val))
 
 
-def extract_buyer_name(text):
+def _skip_as_buyer_candidate(line):
+    """Lines a value can never be hiding in — another field's label, an
+    English sub-label, an items-table header, the document's own header
+    text, or a bare number. Skipped 'for free': they don't count against
+    the search window, because a column-major OCR read can stack a whole
+    run of them between a label and its value."""
+    line = line.strip()
+    if not line:
+        return True
+    if TABLE_HEADER_LINE_RE.search(line) or DOC_FURNITURE_RE.search(line):
+        return True
+    if line.lower().rstrip(".") in _LOOKAHEAD_LABEL_BLOCKLIST:
+        return True
+    if OTHER_FIELD_LABEL_RE.match(line) or PURE_NUMBER_LINE_RE.match(line):
+        return True
+    return any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS)
+
+
+def extract_buyer_name(text, seller_name=None):
     lines = normalize_thai_text(text or "").splitlines()
     # Reversed-order case, confirmed on a real bilingual invoice: OCR
     # printed the buyer name value BEFORE its "Buyer Name" English
@@ -405,7 +471,8 @@ def extract_buyer_name(text):
             # order and "Buyer Name" is just the English half of the
             # label pair, not a value marker to look backward from.
             prev_is_label = any(re.search(kw, prev, re.IGNORECASE) for kw in BUYER_KEYWORDS)
-            if not prev_is_label and _looks_like_value_line(prev) and re.search(r"[ก-๙]", prev):
+            if (not prev_is_label and _looks_like_value_line(prev) and re.search(r"[ก-๙]", prev)
+                    and not DOC_FURNITURE_RE.search(prev) and not _is_seller_name(prev, seller_name)):
                 return prev
 
     # Forward search, keyword by keyword in priority order (same ordering
@@ -423,34 +490,41 @@ def extract_buyer_name(text):
             # "ลูกค้า No.") means this is a code field, not the name field.
             if re.match(r"\s*(?:Code|No\.?|ID|Number)\b", line[m.end():], re.IGNORECASE):
                 continue
+            # Label and value on one line — unambiguous, take it.
             cand = _clean_buyer_value(line[m.end():])
-            if _is_plausible_buyer_name(cand):
+            if _is_plausible_buyer_name(cand) and not _is_seller_name(cand, seller_name):
                 return cand
-            # Value not on the label's line — scan the following few. The
-            # window is deliberately wider than the generic 2-line one in
-            # _find_after_keyword: when a boxed layout is OCR'd column-major
-            # the name can sit several lines below its label, behind a run
-            # of other labels and stray table cells. Lines that are clearly
-            # not a value (another field's label, an English sub-label, an
-            # items-table header) are skipped without consuming the window,
-            # and an implausible candidate no longer ends the search.
-            for j in range(1, 6):
+            # Otherwise scan the lines below. Non-value lines are skipped
+            # for free (see _skip_as_buyer_candidate) because a column-major
+            # OCR read stacks a whole run of labels and header text between
+            # a label and its value; only lines that could plausibly have
+            # BEEN the value spend the budget. Among what's left, a line
+            # that reads like an entity name wins over one that merely has
+            # letters in it — the first text line after the label is often
+            # stray page furniture, not the buyer.
+            fallback = None
+            budget = 4
+            for j in range(1, 12):
                 if i + j >= len(lines):
                     break
-                nxt = lines[i + j].strip()
-                if not nxt:
+                nxt = lines[i + j]
+                if _skip_as_buyer_candidate(nxt):
                     continue
-                if TABLE_HEADER_LINE_RE.search(nxt):
-                    continue
-                if nxt.lower().rstrip(".") in _LOOKAHEAD_LABEL_BLOCKLIST:
-                    continue
-                if OTHER_FIELD_LABEL_RE.match(nxt):
-                    continue
-                if any(re.search(k, nxt, re.IGNORECASE) for k in BUYER_KEYWORDS):
-                    continue  # the label pair's other half, not the value
                 cand = _clean_buyer_value(nxt)
-                if _is_plausible_buyer_name(cand):
+                if (not _is_plausible_buyer_name(cand)) or _is_seller_name(cand, seller_name):
+                    budget -= 1
+                    if budget <= 0:
+                        break
+                    continue
+                if BUYER_ENTITY_HINT_RE.search(cand):
                     return cand
+                if fallback is None:
+                    fallback = cand
+                budget -= 1
+                if budget <= 0:
+                    break
+            if fallback:
+                return fallback
     return None
 
 
@@ -660,7 +734,9 @@ def extract_fields(text, ocr_confidence=None):
     date_raw, date_iso = extract_date(text)
     seller_tax_id = extract_tax_id(text)
     seller_name = extract_seller_name(text)
-    buyer_name = extract_buyer_name(text)
+    # seller_name is passed in so the buyer search can rule it out — see
+    # _is_seller_name
+    buyer_name = extract_buyer_name(text, seller_name=seller_name)
 
     doc_info_block = _extract_doc_info_block(text)
     invoice_no = doc_info_block.get("doc_no") or extract_invoice_no(text)

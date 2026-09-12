@@ -275,6 +275,22 @@ BUYER_NAME_CASES = [
         _BUYER,
     ),
     (
+        "column-major read: page header lands between label and value",
+        "บริษัท รจนา จำกัด (สำนักงานใหญ่)\n"
+        "เลขประจำตัวผู้เสียภาษี 0105558887774\nใบกำกับภาษี/ ใบเสร็จรับเงิน\n"
+        "ชื่อลูกค้า :\nที่อยู่ :\nเลขประจำตัวผู้เสียภาษี\n"
+        "สาขาที่ออก ใบกำกับภาษี/ใบเสร็จรับเงิน : สำนักงานใหญ่\nหน้า 1/1\n"
+        "บริษัท A จำกัด\n99/15 ถนนวิภาวดีรังสิต แขวงจอมพล เขตจตุจักร\n"
+        "กรุงเทพมหานคร 10900\n0105569123456\n",
+        _BUYER,
+    ),
+    (
+        "the seller's own name next to the label is not the buyer",
+        "ใบกำกับภาษี/ ใบเสร็จรับเงิน\nชื่อลูกค้า :\n"
+        "บริษัท รจนา จำกัด (สำนักงานใหญ่)\nบริษัท A จำกัด\n",
+        _BUYER,
+    ),
+    (
         "no buyer field at all -> None, never a stray number",
         "ร้านจรรยา\nใบเสร็จรับเงิน\nวันที่ 23/07/2025\nรวมทั้งสิ้น 1,050.00\n",
         None,
@@ -380,7 +396,7 @@ def main():
     # boxed Thai invoice gets OCR'd that used to yield junk or nothing.
     print("\n--- Buyer name edge cases ---")
     for label, text, expected in BUYER_NAME_CASES:
-        got = extractor.extract_buyer_name(text)
+        got = extractor.extract_buyer_name(text, seller_name=extractor.extract_seller_name(text))
         print(f"  {label}: {got!r}")
         all_ok &= check(f"buyer name — {label}", got == expected)
 
