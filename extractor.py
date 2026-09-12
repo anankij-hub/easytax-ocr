@@ -221,6 +221,50 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
     return None
 
 
+def _find_number_above_keyword(text, keywords, exclude=(), max_lines_up=4):
+    """Find a number printed just ABOVE one of the given labels.
+
+    Ground truth from the live app (บริษัท รจนา invoice, IV1400768-305):
+    Vision emitted the totals column with the first value detached from its
+    label and placed above it, with an unrelated word in between —
+
+        36,728.97
+        หมายเหตุ
+        ราคารวมสินค้า (บาท)
+        ภาษีมูลค่าเพิ่ม 7%
+        2,571.03
+
+    A forward search from "ราคารวมสินค้า" therefore skipped past its own
+    value and returned the VAT figure two lines down, which is how ยอดก่อนภาษี
+    and VAT both ended up as 2,571.03 on screen.
+
+    `exclude` holds figures already claimed by other fields, so the nearest
+    number above can't simply be another field's value read a second time.
+    Stops at another totals label, whose value this would be, not ours."""
+    lines = text.splitlines()
+    for kw in keywords:
+        for i, line in enumerate(lines):
+            if TABLE_HEADER_LINE_RE.search(line) or not re.search(kw, line, re.IGNORECASE):
+                continue
+            for j in range(1, max_lines_up + 1):
+                k = i - j
+                if k < 0:
+                    break
+                prev = lines[k].strip()
+                if not prev:
+                    continue
+                if PURE_NUMBER_LINE_RE.match(prev):
+                    val = _clean_number(prev)
+                    if val is not None and not any(
+                        e is not None and abs(val - e) < 0.005 for e in exclude
+                    ):
+                        return val
+                    break  # nearest number above is already another field's
+                if _classify_totals_label(prev) is not None or TABLE_HEADER_LINE_RE.search(prev):
+                    break
+    return None
+
+
 def has_valid_tax_id_format(tax_id):
     """Just checks the taxpayer ID is 13 digits — no mod-11 checksum
     validation. (Checksum validation was removed on request: extracting
@@ -578,6 +622,73 @@ def extract_buyer_name(text, seller_name=None):
     return None
 
 
+VAT_RATE = 0.07
+
+# Tolerances for checking the three amounts against each other: a couple
+# of satang for rounding on the sum, and a little slack on the rate because
+# a real invoice's VAT is rounded to satang before being printed.
+_AMOUNT_TOL = 0.02
+_RATE_TOL = 0.0015
+
+
+def _amounts_balance(subtotal, vat, total):
+    """ยอดก่อนภาษี + VAT = ยอดรวม"""
+    if subtotal is None or vat is None or total is None:
+        return False
+    return abs((subtotal + vat) - total) <= max(_AMOUNT_TOL, abs(total) * 0.0005)
+
+
+def _vat_rate_ok(subtotal, vat):
+    """VAT เป็น 7% ของยอดก่อนภาษี (หรือเป็นศูนย์ทั้งคู่)"""
+    if subtotal is None or vat is None:
+        return False
+    if subtotal <= 0:
+        return vat == 0
+    return abs(vat / subtotal - VAT_RATE) <= _RATE_TOL
+
+
+def reconcile_totals(subtotal, vat, total):
+    """Cross-check ยอดก่อนภาษี / VAT / ยอดรวม against each other and repair
+    one of them when the other two agree.
+
+    The three amounts on a tax invoice are not independent — subtotal + VAT
+    = total, and VAT is 7% of the subtotal — but each was being extracted by
+    its own keyword search with no check that the results were consistent.
+    A confirmed failure: a real invoice came out subtotal=2,571.03,
+    VAT=2,571.03, total=39,300.00, i.e. the same number was captured twice
+    (the keyword search for the subtotal landed on the VAT figure). The
+    arithmetic says exactly which one is wrong: 39,300.00 − 2,571.03 =
+    36,728.97, and 2,571.03 / 36,728.97 = 7.00% on the nose.
+
+    Only rewrites a value when a candidate set both balances AND has a
+    correct 7% rate, so a guess can't quietly replace what the document
+    actually says. Returns (subtotal, vat, total, note) where note is None
+    if nothing was wrong, or a short Thai explanation for the review log."""
+    if _amounts_balance(subtotal, vat, total) and _vat_rate_ok(subtotal, vat):
+        return subtotal, vat, total, None
+
+    # Each candidate trusts two of the three figures and derives the third.
+    candidates = []
+    if vat is not None and total is not None:
+        candidates.append((round(total - vat, 2), vat, total, "คำนวณยอดก่อนภาษีจากยอดรวม - VAT"))
+    if subtotal is not None and total is not None:
+        candidates.append((subtotal, round(total - subtotal, 2), total, "คำนวณ VAT จากยอดรวม - ยอดก่อนภาษี"))
+    if subtotal is not None and vat is not None:
+        candidates.append((subtotal, vat, round(subtotal + vat, 2), "คำนวณยอดรวมจากยอดก่อนภาษี + VAT"))
+
+    for s, v, t, note in candidates:
+        if _amounts_balance(s, v, t) and _vat_rate_ok(s, v):
+            # Nothing actually changed — the input was already consistent
+            # on this pairing, just incomplete.
+            changed = (s != subtotal) or (v != vat) or (t != total)
+            return s, v, t, (note if changed else None)
+
+    # Two of the three are missing, or nothing adds up — leave the figures
+    # exactly as OCR read them and let the reviewer decide.
+    return subtotal, vat, total, ("ยอดก่อนภาษี + VAT ไม่เท่ากับยอดรวม"
+                                  if None not in (subtotal, vat, total) else None)
+
+
 def classify_doc_type(fields):
     """เต็มรูป ต้องมีเลขผู้เสียภาษีผู้ขาย (13 หลัก) + เลขที่ใบกำกับ + ชื่อผู้ซื้อ
     ถ้าขาดอย่างใดอย่างหนึ่ง ถือเป็นใบย่อ (หัก VAT ซื้อไม่ได้). ไม่ตรวจสอบ checksum
@@ -799,6 +910,20 @@ def extract_fields(text, ocr_confidence=None):
     total = (_clean_number(totals_block["total"]) if "total" in totals_block
              else _clean_number(_find_after_keyword(text, TOTAL_KEYWORDS)))
 
+    # Two fields resolving to the exact same figure means one keyword search
+    # ran past its own value and landed on the next field's — the signature
+    # of a value printed above its label. Try reading it from above before
+    # falling back on arithmetic.
+    if subtotal is not None and subtotal == vat:
+        recovered = _find_number_above_keyword(text, SUBTOTAL_KEYWORDS, exclude=(vat, total))
+        if recovered is not None:
+            subtotal = recovered
+
+    # The three amounts are extracted independently above, each by its own
+    # keyword search — cross-check them against each other before they get
+    # recorded. See reconcile_totals.
+    subtotal, vat, total, totals_note = reconcile_totals(subtotal, vat, total)
+
     fields = {
         "invoice_no": invoice_no,
         "invoice_date_raw": date_raw,
@@ -823,6 +948,11 @@ def extract_fields(text, ocr_confidence=None):
         fields["vat"] = None
 
     reasons = build_review_reasons(fields)
+    # A repaired or irreconcilable set of amounts is worth telling the user
+    # about — either a figure on screen is now a computed one rather than
+    # what OCR read, or the three don't add up and someone must look.
+    if totals_note and fields["doc_type"] != "ย่อ":
+        reasons.append(totals_note)
     fields["needs_review"] = bool(reasons)
     fields["review_reason"] = "; ".join(reasons) if reasons else None
     return fields

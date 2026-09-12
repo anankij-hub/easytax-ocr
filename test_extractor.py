@@ -317,6 +317,122 @@ BUYER_NAME_CASES = [
 ]
 
 
+# (label, (subtotal, vat, total) as extracted, expected after reconciling).
+# The first case is the one reported from the live app.
+TOTALS_CASES = [
+    ("subtotal captured the VAT figure", (2571.03, 2571.03, 39300.00), (36728.97, 2571.03, 39300.00)),
+    ("already consistent, left alone", (36728.97, 2571.03, 39300.00), (36728.97, 2571.03, 39300.00)),
+    ("subtotal missing -> total - VAT", (None, 2571.03, 39300.00), (36728.97, 2571.03, 39300.00)),
+    ("VAT missing -> total - subtotal", (36728.97, None, 39300.00), (36728.97, 2571.03, 39300.00)),
+    ("total missing -> subtotal + VAT", (36728.97, 2571.03, None), (36728.97, 2571.03, 39300.00)),
+    ("total captured the subtotal figure", (36728.97, 2571.03, 36728.97), (36728.97, 2571.03, 39300.00)),
+    ("earlier invoice stays untouched", (4434.58, 310.42, 4745.00), (4434.58, 310.42, 4745.00)),
+    ("unrepairable figures are left as read", (100.0, 55.0, 900.0), (100.0, 55.0, 900.0)),
+    # an ใบย่อ legitimately has only a total — VAT must never be invented
+    ("total only: VAT is not invented", (None, None, 1050.0), (None, None, 1050.0)),
+]
+
+
+# The ACTUAL raw OCR text pasted from the live app's "ดูข้อความ OCR ดิบ"
+# viewer for the บริษัท รจนา invoice IV1400768-305 — ground truth, and the
+# document that finally explained three rounds of wrong guesses about this
+# layout. Google Vision reads this boxed form in an order nothing about the
+# printed page predicts:
+#   - The buyer name lands on the line ABOVE its own label, keeping the
+#     colon separator (": บริษัท A จำกัด"), and the label line picks up a
+#     stray "1" ("ชื่อลูกค้า : 1") — that "1" is what the app showed as the
+#     buyer name. No amount of scanning FORWARD from the label could have
+#     found the name; it isn't there.
+#   - The totals column is scrambled the same way: 36,728.97 appears above
+#     its "ราคารวมสินค้า (บาท)" label with "หมายเหตุ" in between, so a
+#     forward search skipped it and returned the VAT figure below instead —
+#     ยอดก่อนภาษี and VAT both came out 2,571.03.
+#   - The document title is misread as "ใบทำกับภาษี" (not "ใบกำกับภาษี"), so
+#     the เต็มรูป marker has to come from the "เลขที่ใบกำกับภาษี" field label.
+#   - Quantity "10" is duplicated onto two lines, and the signature block at
+#     the end is largely garbage ("Sgomfare").
+REAL_ROJANA_RAW_TEXT = """R
+บริษัท รจนา จำกัด (สำนักงานใหญ่)
+36/9 แขวงขุมทอง เขตลาดกระบัง กรุงเทพฯ 10250
+เลขประจำตัวผู้เสียภาษี 0105558887774
+- โทร/แฟกซ์. 020-4567-902
+: บริษัท A จำกัด
+ชื่อลูกค้า : 1
+สาขาที่ออก ใบกำกับภาษี/ใบเสร็จรับเงิน : สำนักงานใหญ่ หน้า 1/1
+ใบทำกับภาษี/ใบเสร็จรับเงิน
+ที่อยู่ : 99/15 ถนนวิภาวดีรังสิต แขวงจอมพล เขตจตุจักร
+กรุงเทพมหานคร 10900
+เลขประจำตัวผู้เสียภาษี 0105569123456
+เลขที่ใบกำกับภาษี
+IV1400768-305
+วันที่ใบกำกับภาษี
+14/07/68
+ใบสั่งซื้อเลขที่
+ใบสั่งขายเลขที่
+วันครบกำหนด
+ขนส่งโดย
+รหัสพนักงานขาย
+P-68777
+S-22498
+009-P
+ลำดับ รหัสสินค้า
+รายการ
+จำนวน หน่วย ราคา/หน่วย ส่วนลด
+จำนวนเงิน
+1
+002-009
+ถุงขยะ(1*24ถุง)
+10
+10
+แพ็ค
+30
+0
+300
+2
+002-028
+เก้าอี้สำนักงาน
+5
+ตัว
+4,800
+0
+24,000
+3
+002-044
+หมึกเครื่องพิมพ์ HP
+12
+กล่อง
+1,250
+0
+15,000
+36,728.97
+หมายเหตุ
+ราคารวมสินค้า (บาท)
+ภาษีมูลค่าเพิ่ม 7%
+2,571.03
+(สามหมื่นเก้าพันสามร้อยบาทถ้วน)
+จำนวนเงินทั้งสิ้น (บาท)
+39,300.00
+ได้รับสินค้าตามที่ระบุไว้ครบถ้วนแล้ว
+ในนามสำนักงานใหญ่
+ชำาระโดย
+ผู้จ่ายของ
+เงินสด
+เช็ค
+- เงินโอน
+Sgomfare
+ผู้ตรวจสอบ
+เช็คธนาคาร
+เลขที่เช็ค
+ลงนามผู้รับของ
+ผู้มีอำนาจลงนาม
+วันที่
+วันที่
+ผู้ส่งของ
+วันที่บนเช็ค
+ผู้รับเช็ค
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -409,6 +525,37 @@ def main():
     all_ok &= check("real moshi: vat = 183.83 (not 2812)", fields5["vat"] == 183.83)
     all_ok &= check("real moshi: total = 2810.0 (not 1)", fields5["total"] == 2810.0)
 
+    # regression: the ACTUAL raw OCR text from the live app for the รจนา
+    # invoice (see comment on REAL_ROJANA_RAW_TEXT) — ground truth. Every
+    # field has to come out right from text whose line order matches nothing
+    # about how the page is printed.
+    fields6 = extractor.extract_fields(REAL_ROJANA_RAW_TEXT, ocr_confidence=88.0)
+    print("\n--- Real รจนา OCR text fields ---")
+    for k, v in fields6.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real rojana: buyer_name = บริษัท A จำกัด (value sits ABOVE its label, not '1')",
+        fields6["buyer_name"] == "บริษัท A จำกัด",
+    )
+    all_ok &= check(
+        "real rojana: subtotal = 36728.97 read from the page (not the VAT figure)",
+        fields6["subtotal"] == 36728.97,
+    )
+    all_ok &= check("real rojana: vat = 2571.03", fields6["vat"] == 2571.03)
+    all_ok &= check("real rojana: total = 39300.0", fields6["total"] == 39300.0)
+    all_ok &= check(
+        "real rojana: amounts balance", fields6["subtotal"] + fields6["vat"] == fields6["total"]
+    )
+    all_ok &= check("real rojana: invoice_no = IV1400768-305", fields6["invoice_no"] == "IV1400768-305")
+    all_ok &= check("real rojana: date = 2025-07-14", fields6["invoice_date_iso"] == "2025-07-14")
+    all_ok &= check(
+        "real rojana: seller = บริษัท รจนา จำกัด (สำนักงานใหญ่)",
+        fields6["seller_name"] == "บริษัท รจนา จำกัด (สำนักงานใหญ่)",
+    )
+    all_ok &= check("real rojana: seller tax id", fields6["seller_tax_id"] == "0105558887774")
+    all_ok &= check("real rojana: classified เต็มรูป", fields6["doc_type"] == "เต็มรูป")
+    all_ok &= check("real rojana: not flagged for review", fields6["needs_review"] is False)
+
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
     # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the
     # items table instead of the ชื่อลูกค้า value. Each case below is a way a
@@ -430,6 +577,31 @@ def main():
     all_ok &= check(
         "missing buyer name is flagged for review",
         no_buyer["needs_review"] and "ชื่อผู้ซื้อ" in (no_buyer["review_reason"] or ""),
+    )
+
+    # regression: ยอดก่อนภาษี / VAT / ยอดรวม must agree with each other.
+    # Reported from the live app — an invoice came back with ยอดก่อนภาษี and
+    # VAT both showing 2,571.03 against a 39,300.00 total, i.e. the same
+    # figure captured twice. The three amounts are not independent, so the
+    # arithmetic identifies which one is wrong on its own.
+    print("\n--- Totals reconciliation ---")
+    for label, amounts, expected in TOTALS_CASES:
+        got = extractor.reconcile_totals(*amounts)
+        print(f"  {label}: {amounts} -> {got[:3]}")
+        all_ok &= check(f"totals — {label}", got[:3] == expected)
+
+    # an invoice whose amounts can't be reconciled must be flagged, not
+    # silently recorded with figures that don't add up
+    broken = extractor.extract_fields(
+        "บริษัท รจนา จำกัด\nใบกำกับภาษี/ใบเสร็จรับเงิน\n"
+        "เลขประจำตัวผู้เสียภาษี 0105558887774\nเลขที่ใบกำกับภาษี IV1400768-305\n"
+        "ชื่อลูกค้า : บริษัท A จำกัด\nวันที่ 14/07/68\n"
+        "รวมเป็นเงิน 100.00\nภาษีมูลค่าเพิ่ม 7% 55.00\nรวมทั้งสิ้น 900.00\n",
+        ocr_confidence=90.0,
+    )
+    all_ok &= check(
+        "amounts that don't add up are flagged for review",
+        broken["needs_review"] and "ไม่เท่ากับยอดรวม" in (broken["review_reason"] or ""),
     )
 
     # multi-invoice split
