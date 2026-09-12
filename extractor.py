@@ -387,6 +387,19 @@ BUYER_ENTITY_HINT_RE = re.compile(
 )
 
 
+# An address line is never the buyer's NAME, but it sits right next to the
+# name in every buyer box and is the most common thing to grab by mistake
+# when the name itself isn't where the scan expects it. Confirmed on the
+# รจนา invoice: the third line of the customer box, "กรุงเทพมหานคร 10900",
+# came out as the buyer name. Matches a line that starts with an address
+# component, or that ends in a 5-digit postcode.
+ADDRESS_LINE_RE = re.compile(
+    r"^(?:กรุงเทพ|จังหวัด|จ\.|อำเภอ|อ\.|ตำบล|ต\.|เขต|แขวง|ถนน|ถ\.|ซอย|ซ\.|หมู่|บ้านเลขที่|"
+    r"เลขที่\s*\d|\d+/\d+|Moo\b|Soi\b|Road\b|Rd\.)|\d{5}\s*$",
+    re.IGNORECASE,
+)
+
+
 def _norm_name(name):
     """Squash a name down for comparison — spaces and bracketed suffixes
     like '(สำนักงานใหญ่)' vary between how the seller's name is printed in
@@ -450,7 +463,38 @@ def _skip_as_buyer_candidate(line):
         return True
     if OTHER_FIELD_LABEL_RE.match(line) or PURE_NUMBER_LINE_RE.match(line):
         return True
+    if ADDRESS_LINE_RE.search(line):
+        return True
     return any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS)
+
+
+def _nearest_entity_name(lines, label_idx, seller_name, max_distance=25):
+    """Find the line that reads like an entity name closest to the buyer
+    label — searching the WHOLE document, not just forward from the label.
+
+    Line order is the weakest thing about OCR on a boxed layout: Google
+    Vision groups the page into blocks and can emit a box's label run and
+    its value run in either order, with unrelated header text in between.
+    Two rounds of fixing the forward scan kept losing to whatever the next
+    reordering was, so the name is located by what it LOOKS like and how
+    close it is to the label instead. Lines after the label still win ties
+    over lines before it, which is the normal reading order."""
+    best = None
+    for j, raw in enumerate(lines):
+        if j == label_idx or abs(j - label_idx) > max_distance:
+            continue
+        if _skip_as_buyer_candidate(raw):
+            continue
+        cand = _clean_buyer_value(raw)
+        if not _is_plausible_buyer_name(cand) or _is_seller_name(cand, seller_name):
+            continue
+        if not BUYER_ENTITY_HINT_RE.search(cand):
+            continue
+        dist = j - label_idx
+        rank = (0, dist) if dist > 0 else (1, -dist)  # after the label first
+        if best is None or rank < best[0]:
+            best = (rank, cand)
+    return best[1] if best else None
 
 
 def extract_buyer_name(text, seller_name=None):
@@ -523,6 +567,12 @@ def extract_buyer_name(text, seller_name=None):
                 budget -= 1
                 if budget <= 0:
                     break
+            # Nothing that reads like a name in the lines just below the
+            # label — widen to the nearest entity-looking line anywhere
+            # around it before settling for the forward scan's best guess.
+            near = _nearest_entity_name(lines, i, seller_name)
+            if near:
+                return near
             if fallback:
                 return fallback
     return None
