@@ -827,6 +827,124 @@ kin
 """
 
 
+# Raw OCR text from the live app for the ฟาร์มเงินฟาร์มทอง invoice
+# INV-2568-001 — ground truth. The amounts came out right; the two NAMES
+# were wrong, and for linked reasons:
+#   - Vision emitted the customer box's entire label column first —
+#     "ชื่อลูกค้า", "Customer Name", "ที่อยู่", ... twelve lines — before the
+#     letterhead. The seller search only looked at the first eight lines,
+#     found no company name there, and its fallback returned the bare label
+#     "ชื่อลูกค้า" as the seller.
+#   - With the seller misidentified, the buyer search's "the buyer is never
+#     the seller" guard had nothing real to compare against, so it took the
+#     seller's own name as the buyer. Fixing the seller alone was not
+#     enough either: the letterhead repeats the name in English on the next
+#     line ("FARM NGERN FARM THONG CO., LTD."), and that twin was then
+#     picked instead.
+REAL_FARM_RAW_TEXT = """ชื่อลูกค้า
+Customer Name
+ที่อยู่
+Address
+เลขประจำตัวผู้เสียภาษีอากร
+Tax Identification
+โทร.Tel.
+ล่าดับที
+1
+2
+เลขที่ใบสั่งชื้อ
+PIO No.
+บริษัท ฟาร์มเงินฟาร์มทอง จำกัด
+FARM NGERN FARM THONG CO., LTD.
+55/2 หมู่ 3 ตำาบลบางเลน อำเภอบางเลน จังหวัดนครปฐม 73130
+55/2 Moo 3, Bang Len, Nakhon Pathom 73130
+Tel. 034-991-234 Email: contact@ngernthongfarm.example
+เลขประจำตัวผู้เสียภาษีอากร 0173568002246 (สำนักงานใหญ่)
+ต้นฉบับใบกำกับภาษี/ใบส่งสินค้า
+ORIGINAL TAX INVOICE / DELIVERY ORDER
+สำหรับลูกค้า / CUSTOMER
+เอกสารออกเป็นชุด
+บริษัท A จำกัด
+เลขที
+INV-2568-001
+99/15 ถนนวิภาวดีรังสิต
+วันที
+31/01/2568
+แขวงจอมพล เขตจตุจักร
+Date
+กรุงเทพมหานคร 10900
+พนักงานขาย
+Salesman
+สมพงษ์ ไร่นาที
+0105569123456
+02-511-3456
+ผู้ติดต่อ
+Contact By
+ผู้สั่งชื้อสินค้า
+Customer Order
+PO-A-2568-01
+กิตติพงษ์ วิริยะกุล
+ข้าวสารหอมมะลิ 100%
+500 nn. x 32.00 1/
+ไข่ไก่คละเบอร์ (แผง 30 ฟอง)
+200 24 x 115.00 บาท
+รายการ
+Description
+ฝ่ายจัดซึ้ง บจก. A
+งวดประจำเดือนมกราคม 2568
+วันครบกำหนด าระ
+เงื่อนไขในการชาระเงิน
+Term of Paymers
+Due Date
+เงินสด
+จำนวน
+Quantity
+ราคาต่อหน่วย
+Unit Price
+500
+32,00
+15/02/2568
+จำนวนเงิน
+Amount
+16,000,00
+200
+115,00
+23,000,00
+1. สินค้าตามใบส่งสินค้านี้ หากมีการแตกด้าวหรือชำรุดเสียหาย กรุณาแจ้งกลับภายใน 3 วัน มิฉะนั้นทางบริษัทจะไม่รับผิดชอบใดๆ ทั้งสิ้น
+2. การชำระเงินเกินกำหนดเวลาที่ตกลง จะต้องเสียดอกเบี้ยตามที่กฎหมายกำหนด
+3. สินค้าตามรายการนี้ยังคงเป็นกรรมสิทธิ์ของผู้ขาย จนกว่าผู้ซื้อจะได้ชำระเงินครบถ้วนแล้ว
+4. ราคานี้สำหรับค่าสั่งซื้อรอบต้นปี ยืนราคาถึงสิ้นเดือนมกราคมเท่านั้น
+รวมเงิน
+Total
+หักเงินมัดจ่า
+Depost
+หักส่วนลด
+Discount
+รวมราคาสินค้า
+ภาษีมูลค่าเพิ่ม
+จำนวนเงินรวมทั้งสิ้น
+Grand Teral
+ได้รับสินค้าตามรายการถูกต้องเรียบร้อยแล้ว
+Received the shower goods in good condition
+ผู้รับสินค้า
+Received by
+ผู้ส่งสินค้า
+Delivery by
+วันที่ 31/01/2558
+2.4 31/01/2558
+el.
+ในนาม บริษัท ฟาร์มเงินฟาร์มทอง จำกัด
+For FARM NGERN FARM THONG CO. LTD
+ผู้มี านาจลงนาม
+Authorized Signature
+39,000,00
+0.00
+500,00
+38,500,00
+2,695,00
+41,195.00
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -1133,6 +1251,45 @@ def main():
     all_ok &= check(
         "a plain 'เลขที่' label still supplies the invoice number",
         extractor.extract_invoice_no("เลขที่\nIV20250123-089\n") == "IV20250123-089",
+    )
+
+    # regression: the ฟาร์มเงินฟาร์มทอง invoice (see REAL_FARM_RAW_TEXT) —
+    # seller and buyer names, which fail together
+    fields12 = extractor.extract_fields(REAL_FARM_RAW_TEXT, ocr_confidence=90.0)
+    print("\n--- Real ฟาร์มเงินฟาร์มทอง OCR text fields ---")
+    for k, v in fields12.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real farm: seller_name is the company, not the label 'ชื่อลูกค้า'",
+        fields12["seller_name"] == "บริษัท ฟาร์มเงินฟาร์มทอง จำกัด",
+    )
+    all_ok &= check(
+        "real farm: buyer_name = บริษัท A จำกัด (not the seller, Thai or English)",
+        fields12["buyer_name"] == "บริษัท A จำกัด",
+    )
+    all_ok &= check("real farm: invoice_no = INV-2568-001", fields12["invoice_no"] == "INV-2568-001")
+    all_ok &= check("real farm: date = 2025-01-31", fields12["invoice_date_iso"] == "2025-01-31")
+    all_ok &= check("real farm: seller tax id", fields12["seller_tax_id"] == "0173568002246")
+    all_ok &= check("real farm: subtotal = 38500.0", fields12["subtotal"] == 38500.00)
+    all_ok &= check("real farm: vat = 2695.0", fields12["vat"] == 2695.00)
+    all_ok &= check("real farm: total = 41195.0", fields12["total"] == 41195.00)
+    all_ok &= check("real farm: classified เต็มรูป", fields12["doc_type"] == "เต็มรูป")
+    all_ok &= check("real farm: not flagged for review", fields12["needs_review"] is False)
+
+    # a bare field label is never a company name
+    all_ok &= check(
+        "seller search skips a label-only line",
+        extractor.extract_seller_name("ชื่อลูกค้า\nCustomer Name\nที่อยู่\n"
+                                      "บริษัท ฟาร์มเงินฟาร์มทอง จำกัด\n")
+        == "บริษัท ฟาร์มเงินฟาร์มทอง จำกัด",
+    )
+    all_ok &= check(
+        "an ALL-CAPS English company name is recognised as one",
+        bool(extractor.COMPANY_NAME_HINT_RE.search("FARM NGERN FARM THONG CO., LTD.")),
+    )
+    all_ok &= check(
+        "'บริษัท A จำกัด' is Thai script despite the letter A",
+        extractor._is_latin_script("บริษัท A จำกัด") is False,
     )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the

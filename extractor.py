@@ -128,7 +128,10 @@ RECEIPT_MARKER = r"ใบเสร็จรับเงิน"
 # scanner can lock onto this row plus the first line item's numbers and
 # return a completely wrong (but internally consistent) result.
 TABLE_HEADER_LINE_RE = re.compile(
-    r"ลำดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย|ราคาต่อหน่วย|รายการสินค้า|จำนวนเงินรวม(?!สุทธิ|ทั้งสิ้?น)|"
+    # "ล่าดับ" is how OCR keeps rendering "ลำดับ" (SARA AM read as MAI EK +
+    # SARA AA) — a spelling normalize_thai_text can't repair, since that
+    # only merges the decomposed NIKHAHIT form.
+    r"ลำดับ|ล่าดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย|ราคาต่อหน่วย|รายการสินค้า|จำนวนเงินรวม(?!สุทธิ|ทั้งสิ้?น)|"
     r"PRODUCT\s*CODE|DESCRIPTION|QUANTITY|UNIT\s*PRICE|ITEM\s*DISCOUNT|TOTAL\s*AMOUNT",
     re.IGNORECASE,
 )
@@ -198,7 +201,7 @@ def _clean_number(s):
 # header row. TABLE_HEADER_LINE_RE can't catch these on its own because
 # several are ordinary words that also label real fields.
 COLUMN_HEADER_WORD_RE = re.compile(
-    r"^(?:ลำดับ(?:ที่)?|ที่|รหัสสินค้า|รหัส|รายการ(?:สินค้า)?(?:\s*/\s*บริการ)?|รายละเอียด|"
+    r"^(?:ลำดับ(?:ที่?)?|ล่าดับ(?:ที่?)?|ที่|รหัสสินค้า|รหัส|รายการ(?:สินค้า)?(?:\s*/\s*บริการ)?|รายละเอียด|"
     r"จำนวน|จำนวนเงิน|หน่วย|ราคา(?:\s*/\s*หน่วย|ต่อหน่วย)?|ราคาสุทธิ|ส่วนลด|มูลค่า|"
     r"No\.?|Item|Qty|Unit|Price|Amount|Description|Discount|Total)\s*$",
     re.IGNORECASE,
@@ -515,7 +518,36 @@ def extract_date(text):
     return None, None
 
 
-COMPANY_NAME_HINT_RE = re.compile(r"บริษัท|ห้างหุ้นส่วน|จำกัด|มหาชน|Co\.,?\s*Ltd|Company")
+# Case-insensitive: a letterhead's English name is normally set in capitals
+# ("FARM NGERN FARM THONG CO., LTD."), which the case-sensitive pattern did
+# not recognise as a company name at all.
+COMPANY_NAME_HINT_RE = re.compile(
+    r"บริษัท|ห้างหุ้นส่วน|จำกัด|มหาชน|Co\.,?\s*Ltd|Company|Corp|Public\s*Co",
+    re.IGNORECASE,
+)
+
+
+def _is_field_label_line(line):
+    """A line that is nothing but a field's label — "ชื่อลูกค้า", "Customer
+    Name", "Tax Identification", a table heading. Never anybody's name."""
+    line = line.strip()
+    if not line:
+        return True
+    if line.lower().rstrip(".") in _LOOKAHEAD_LABEL_BLOCKLIST:
+        return True
+    if OTHER_FIELD_LABEL_RE.match(line) or COLUMN_HEADER_WORD_RE.match(line):
+        return True
+    if TABLE_HEADER_LINE_RE.search(line):
+        return True
+    return any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS)
+
+
+# How far down to look for the seller's letterhead. Confirmed live: an
+# invoice was OCR'd with its entire label column first — "ชื่อลูกค้า",
+# "Customer Name", "ที่อยู่", ... twelve lines of it — before the letterhead,
+# so an eight-line window found no company name and the old fallback
+# returned the label "ชื่อลูกค้า" as the seller.
+_SELLER_SEARCH_LINES = 20
 
 
 def extract_seller_name(text):
@@ -525,18 +557,18 @@ def extract_seller_name(text):
     # its own line above the real registered name ("บริษัท โมชิ โมชิ รีเทล
     # คอร์ปอเรชั่น จำกัด (มหาชน)"), and a plain "first short line" heuristic
     # grabs the logo text instead of the real name.
-    for line in lines[:8]:
+    for line in lines[:_SELLER_SEARCH_LINES]:
         if re.search(TAXINV_MARKER, line) or re.search(RECEIPT_MARKER, line):
             continue
-        if re.search(r"\d{10,}", line):
+        if re.search(r"\d{10,}", line) or _is_field_label_line(line):
             continue
         if len(line) >= 5 and COMPANY_NAME_HINT_RE.search(line):
             return line
     # fallback: first short-ish non-marker line
-    for line in lines[:6]:
+    for line in lines[:8]:
         if re.search(TAXINV_MARKER, line) or re.search(RECEIPT_MARKER, line):
             continue
-        if re.search(r"\d{10,}", line):
+        if re.search(r"\d{10,}", line) or _is_field_label_line(line):
             continue
         if len(line) >= 3:
             return line
@@ -686,7 +718,43 @@ def _skip_as_buyer_candidate(line):
     return any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS)
 
 
-def _nearest_entity_name(lines, label_idx, seller_name, max_distance=25):
+def _is_latin_script(line):
+    """Written in Latin letters rather than Thai. A stray letter inside a
+    Thai name ("บริษัท A จำกัด") must not count, so require a few of them
+    and no Thai at all."""
+    return len(re.findall(r"[A-Za-z]", line)) >= 3 and not re.search(r"[ก-๙]", line)
+
+
+def _seller_block(lines, seller_name, radius=2):
+    """Line numbers of the seller's letterhead — the line carrying its name
+    plus its immediate neighbours, which hold the SAME name in the other
+    language ("บริษัท ฟาร์มเงินฟาร์มทอง จำกัด" / "FARM NGERN FARM THONG CO.,
+    LTD."). Comparing the buyer candidate against the seller's name alone
+    misses that translated twin, and a real invoice recorded it as the
+    buyer.
+
+    Only a neighbour written in the OTHER script counts — excluding every
+    nearby line would swallow the buyer's own name when the two sit next to
+    each other, which happens whenever OCR emits the value column first."""
+    if not seller_name:
+        return frozenset()
+    for i, line in enumerate(lines):
+        if not _is_seller_name(line.strip(), seller_name):
+            continue
+        block = {i}
+        seller_is_latin = _is_latin_script(line)
+        for j in range(max(0, i - radius), min(len(lines), i + radius + 1)):
+            neighbour = lines[j].strip()
+            if j == i or not neighbour:
+                continue
+            if (_is_latin_script(neighbour) != seller_is_latin
+                    and COMPANY_NAME_HINT_RE.search(neighbour)):
+                block.add(j)
+        return frozenset(block)
+    return frozenset()
+
+
+def _nearest_entity_name(lines, label_idx, seller_name, max_distance=25, skip_idx=frozenset()):
     """Find the line that reads like an entity name closest to the buyer
     label — searching the WHOLE document, not just forward from the label.
 
@@ -699,7 +767,7 @@ def _nearest_entity_name(lines, label_idx, seller_name, max_distance=25):
     over lines before it, which is the normal reading order."""
     best = None
     for j, raw in enumerate(lines):
-        if j == label_idx or abs(j - label_idx) > max_distance:
+        if j == label_idx or abs(j - label_idx) > max_distance or j in skip_idx:
             continue
         if _skip_as_buyer_candidate(raw):
             continue
@@ -717,6 +785,7 @@ def _nearest_entity_name(lines, label_idx, seller_name, max_distance=25):
 
 def extract_buyer_name(text, seller_name=None):
     lines = normalize_thai_text(text or "").splitlines()
+    seller_block = _seller_block(lines, seller_name)
     # Reversed-order case, confirmed on a real bilingual invoice: OCR
     # printed the buyer name value BEFORE its "Buyer Name" English
     # sub-label (with the Thai label above the value garbled beyond
@@ -769,6 +838,8 @@ def extract_buyer_name(text, seller_name=None):
             for j in range(1, 12):
                 if i + j >= len(lines):
                     break
+                if i + j in seller_block:
+                    continue
                 nxt = lines[i + j]
                 if _skip_as_buyer_candidate(nxt):
                     continue
@@ -788,7 +859,7 @@ def extract_buyer_name(text, seller_name=None):
             # Nothing that reads like a name in the lines just below the
             # label — widen to the nearest entity-looking line anywhere
             # around it before settling for the forward scan's best guess.
-            near = _nearest_entity_name(lines, i, seller_name)
+            near = _nearest_entity_name(lines, i, seller_name, skip_idx=seller_block)
             if near:
                 return near
             if fallback:
