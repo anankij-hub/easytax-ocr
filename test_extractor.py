@@ -1012,6 +1012,96 @@ TAX INVOICE
 """
 
 
+# Raw OCR text from the live app for the ไทยสยาม เทรดดิ้ง invoice
+# TS-INV-016801 — ground truth. VAT and the total were wrong:
+#   - "ภาษีมูลค่าเพิ่ม 7%" came through as "ภาพมูลค่าเพิ่ม 7%" (ษี misread as
+#     พ), so no VAT amount was found at all.
+#   - The total label "ยอดชำระสุทธิ" arrived as "ยอดชำาระสุทธิ", with SARA AM
+#     doubled by a SARA AA, and matched nothing.
+#   - With no total label recognised, the grand-total keyword instead
+#     matched "จำนวนเงินรวมทั้งสิ้น (ตัวอักษร)" — the amount written out in
+#     words, which carries no figure — and took the subtotal's 35,350.00
+#     from two lines below it.
+REAL_THAISIAM_RAW_TEXT = """TS
+ไทยสยาม เทรดติ้ง แอนด์ ดิสทริบิวชั่น จำกัด
+Thai Siam Trading & Distribution Co., Ltd.
+สำนักงานใหญ่ เลขประจำตัวผู้เสียภาษี : 0107558099887
+ใบกำกับภาษี
+TAX INVOICE / RECEIPT
+ฉบับที่ 1 : ต้นฉบับลูกค้า (CUSTOMER COPY)
+ผู้ขาย / SELLER
+ไทยสยาม เทรดดิ้ง แอนด์ ดิสทริบิวชั่น จำกัด
+78 อาคารไทยสยามทาวเวอร์ ชั้น 12 ถนนพระราม 4
+แขวงคลองเตย เขตคลองเตย กรุงเทพฯ 10110
+โทร. 02-678-9900 | เลขผู้เสียภาษี : 0107558099887
+ลูกค้า / CUSTOMER
+บริษัท C จำกัด
+456/89 ถนนสุขุมวิท ตำบลบางเมือง อำเภอเมือง
+สมุทรปราการ จังหวัดสมุทรปราการ 10270
+เลขประจำตัวผู้เสียภาษี : 0115569345678
+รายละเอียดเอกสาร
+เลขที่เอกสาร
+วันที่ออก
+อ้างอิงใบสั่งซื้อ
+สกุลเงิน
+TS-INV-016801
+22 มกราคม 2568
+PO-6801-088
+THB
+รายละเอียดสินค้า/บริการ
+1 อุปกรณ์สำนักงาน รุ่นมาตรฐาน (ชุดคละแบบ)
+2
+ค่าติดตั้งและฝึกอบรมการใช้งานระบบ
+จำนวน
+หน่วย
+ราคา/หน่วย
+ส่วนลด
+จำนวนเงิน
+15
+ชุด
+1,290.00
+0.00
+19,350.00
+1
+งาน
+12,000.00
+1,000.00
+11,000.00
+3 ค่าบริการบำรุงรักษารายเดือน (มกราคม 2568)
+1
+เดือน
+3,500.00
+0.00
+3,500.00
+4
+ค่าจัดส่งและขนถ่ายสินค้า
+1
+งาน
+1,500.00
+0.00
+1,500.00
+จำนวนเงินรวมทั้งสิ้น (ตัวอักษร)
+รวมมูลค่าสินค้า/บริการ
+35,350,00
+สามหมื่นหกพันเจ็ดร้อยห้าสิบสี่บาทห้าสิบสตางค์
+ส่วนลดรวม
+-1,000.00
+เงื่อนไขการชำระเงิน: โอนเข้าบัญชีภายใน 30 วันนับจากวันที่ในใบกำกับ
+ภาษี
+มูลค่าหลังหักส่วนลด
+34,350.00
+สแกนเพื่อตรวจสอบ e-Tax Invoice
+ภาพมูลค่าเพิ่ม 7%
+2,404.50
+ยอดชำาระสุทธิ
+36,754.50
+ผู้จัดทำเอกสาร
+ผู้ตรวจสอบ
+ผู้มีอำนาจอนุมัติ
+เอกสารนี้จัดทำขึ้นเพื่อการทดสอบระบบเท่านั้น (Generated for OCR/system testing purposes only) - ไม่ใช่เอกสารทางการเงินจริง
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -1427,6 +1517,52 @@ def main():
     all_ok &= check(
         "'ทุกคาสินค้าบริการ' (mangled มูลค่าสินค้า/บริการ) is the subtotal",
         extractor._classify_totals_label("ทุกคาสินค้าบริการ") == "subtotal",
+    )
+
+    # regression: the ไทยสยาม เทรดดิ้ง invoice (see REAL_THAISIAM_RAW_TEXT)
+    fields14 = extractor.extract_fields(REAL_THAISIAM_RAW_TEXT, ocr_confidence=90.0)
+    print("\n--- Real ไทยสยาม เทรดดิ้ง OCR text fields ---")
+    for k, v in fields14.items():
+        print(f"  {k}: {v}")
+    all_ok &= check("real thaisiam: subtotal = 34350.0", fields14["subtotal"] == 34350.00)
+    all_ok &= check("real thaisiam: vat = 2404.5 (was missing)", fields14["vat"] == 2404.50)
+    all_ok &= check("real thaisiam: total = 36754.5 (was the subtotal)", fields14["total"] == 36754.50)
+    all_ok &= check("real thaisiam: invoice_no", fields14["invoice_no"] == "TS-INV-016801")
+    all_ok &= check("real thaisiam: date = 2025-01-22", fields14["invoice_date_iso"] == "2025-01-22")
+    all_ok &= check("real thaisiam: buyer_name", fields14["buyer_name"] == "บริษัท C จำกัด")
+    all_ok &= check("real thaisiam: not flagged for review", fields14["needs_review"] is False)
+
+    # SARA AM doubled by a SARA AA — OCR does this constantly
+    all_ok &= check(
+        "'ยอดชำาระสุทธิ' normalises to 'ยอดชำระสุทธิ'",
+        extractor.normalize_thai_text("ยอดชำาระสุทธิ") == "ยอดชำระสุทธิ",
+    )
+    all_ok &= check(
+        "'วันครบกำาหนด' normalises to 'วันครบกำหนด'",
+        extractor.normalize_thai_text("วันครบกำาหนด") == "วันครบกำหนด",
+    )
+    all_ok &= check(
+        "'ยอดชำระสุทธิ' is the total",
+        extractor._classify_totals_label(extractor.normalize_thai_text("ยอดชำาระสุทธิ")) == "total",
+    )
+    all_ok &= check(
+        "'ภาพมูลค่าเพิ่ม 7%' (ษี misread as พ) is still the VAT",
+        extractor._classify_totals_label("ภาพมูลค่าเพิ่ม 7%") == "vat",
+    )
+    all_ok &= check(
+        "the loosened VAT pattern still can't claim the VATable-goods line",
+        extractor._classify_totals_label("สินค้าที่เสียภาษีมูลค่าเพิ่ม") == "subtotal",
+    )
+    all_ok &= check(
+        "the loosened VAT pattern still can't claim the exempt line",
+        extractor._classify_totals_label("สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม") == "exempt",
+    )
+    all_ok &= check(
+        "an amount-in-words line never supplies a figure",
+        extractor._find_after_keyword(
+            "จำนวนเงินรวมทั้งสิ้น (ตัวอักษร)\nรวมมูลค่าสินค้า\n35,350.00\n",
+            extractor.TOTAL_KEYWORDS,
+        ) is None,
     )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the

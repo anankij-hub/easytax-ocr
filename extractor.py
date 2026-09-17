@@ -33,7 +33,12 @@ def normalize_thai_text(text):
     # Explicit codepoints (not literal Thai characters typed in source) so
     # this is unambiguous no matter how this file itself gets
     # encoded/normalized: ํ NIKHAHIT + า SARA AA -> ำ SARA AM
-    return text.replace("ํา", "ำ")
+    text = text.replace("ํา", "ำ")
+    # SARA AM followed by SARA AA is not a legal Thai sequence — SARA AM
+    # already closes the syllable — so "ำา" is always OCR doubling the
+    # vowel. It shows up constantly ("ยอดชำาระสุทธิ", "วันครบกำาหนด",
+    # "ตำาบล", "ชำาระโดย") and breaks every keyword containing it.
+    return text.replace("ำา", "ำ")
 
 THAI_MONTHS = {
     "มกราคม": 1, "ม.ค.": 1, "ม.ค": 1,
@@ -79,8 +84,13 @@ DATE_TOKEN_RE = re.compile(r"\d{1,4}[/.\-]\d{1,2}[/.\-]\d{1,4}")
 # ("ษีมูลค่าเพิ่ม 7%"), leaving no VAT amount at all. The exclusions are
 # repeated with that syllable attached so the shorter match can't sneak
 # past them by starting one syllable later.
+# The real anchor is "มูลค่าเพิ่ม"; everything before it is whatever OCR made
+# of "ภาษี" — seen as "ภาษี", "ษี" (first syllable clipped) and "ภาพ" (ษี
+# misread) on real invoices. Each exclusion is repeated with every prefix
+# length so a shorter match can't start past the lookbehind and sneak in.
 VAT_KEYWORDS = [
-    r"(?<!ที่เสีย)(?<!ยกเว้น)(?<!ที่เสียภา)(?<!ยกเว้นภา)(?:ภา)?ษีมูลค่าเพิ่ม",
+    r"(?<!ที่เสีย)(?<!ยกเว้น)(?<!ที่เสียภา)(?<!ยกเว้นภา)(?<!ที่เสียภาษี)(?<!ยกเว้นภาษี)"
+    r"(?:ภาษี|ภาพ|ภา|ษี)?มูลค่าเพิ่ม",
     r"VAT", r"Vat",
 ]
 # Most specific / least ambiguous first. "จำนวนเงิน" (bare, no suffix) is
@@ -115,7 +125,8 @@ TOTAL_KEYWORDS = [
     r"จำนวนเงิน(?:รวม)?ทั้งสิ้?น", r"จำนวนเงินรวมสุทธิ", r"รวมมูลค่าสุทธิ", r"มูลค่าสุทธิ",
     # "รวมทั้งสิ้น" with an optional word in the middle — invoices write
     # "รวมเงินทั้งสิ้น", "รวมมูลค่าทั้งสิ้น", "รวมราคาทั้งสิ้น" for the same thing.
-    r"รวม(?:เงิน|มูลค่า|ราคา|จำนวนเงิน)?ทั้งสิ้?น", r"ยอดรวมสุทธิ", r"ยอดรวม",
+    r"รวม(?:เงิน|มูลค่า|ราคา|จำนวนเงิน)?ทั้งสิ้?น", r"ยอดชำระ(?:สุทธิ|เงิน)?",
+    r"ยอดสุทธิ", r"ยอดรวมสุทธิ", r"ยอดรวม",
     r"Grand\s*Total", r"Total\s*Amount", r"Total",
 ]
 # "ลูกค้า" carries two negative lookbehinds so it matches the buyer-name
@@ -148,6 +159,11 @@ TABLE_HEADER_LINE_RE = re.compile(
     # SARA AA) — a spelling normalize_thai_text can't repair, since that
     # only merges the decomposed NIKHAHIT form.
     r"ลำดับ|ล่าดับ|รหัสสินค้า|ราคา\s*/\s*หน่วย|ราคาต่อหน่วย|รายการสินค้า|จำนวนเงินรวม(?!สุทธิ|ทั้งสิ้?น)|"
+    # "จำนวนเงินรวมทั้งสิ้น (ตัวอักษร)" spells the total out in words and
+    # never carries a figure — but it matches the grand-total keywords, so
+    # the search that landed on it took the next number it could find,
+    # which belonged to a different field two lines below.
+    r"\(\s*ตัวอักษร\s*\)|\(\s*ตัวหนังสือ\s*\)|\(\s*ALPHABET\s*\)|"
     r"PRODUCT\s*CODE|DESCRIPTION|QUANTITY|UNIT\s*PRICE|ITEM\s*DISCOUNT|TOTAL\s*AMOUNT",
     re.IGNORECASE,
 )
@@ -339,6 +355,16 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
     # "IV20250504".
     for kw in keywords:
         for m in re.finditer(kw, text, re.IGNORECASE):
+            # Honour the same "this line never holds a value" rule as the
+            # line-based pass above — the fallback used to ignore it and
+            # could still read a figure off a table heading or an
+            # amount-in-words line.
+            if skip_header_lines:
+                line_start = text.rfind("\n", 0, m.start()) + 1
+                line_end = text.find("\n", m.start())
+                on_line = text[line_start:line_end if line_end != -1 else len(text)]
+                if TABLE_HEADER_LINE_RE.search(on_line):
+                    continue
             window_text = text[m.end():m.end() + window + _WINDOW_OVERRUN]
             val = _best_match_on_line(window_text, value_pattern,
                                       require_digit=require_digit, max_start=window)
@@ -1209,7 +1235,7 @@ _DOC_INFO_BLOCK_KEYS = [
     ("doc_ref_no", [r"เลขที่เอกสารอ้างอิง", r"Document\s*Ref"]),
     ("doc_ref_date", [r"วันที่เอกสารอ้างอิง", r"Date\s*of\s*Ref"]),
     ("credit", [r"^เครดิต\s*[/／]?", r"^Credit\b"]),
-    ("due_date", [r"วันครบกำ?าหนด", r"Due\s*Date"]),
+    ("due_date", [r"วันครบกำ?า?หนด", r"Due\s*Date"]),
     ("po_no", [r"เลขที่ใบสั่งซื้อ", r"Purchase\s*Order\s*No", r"PO\.?\s*No"]),
     ("salesman", [r"พนักงานขาย", r"Sale?s?man"]),
     ("customer_code", [r"รหัสลูกค้า", r"Customer\s*(?:Code|No)", r"^.{0,20}[/／]\s*CUSTOMER\s*$"]),
