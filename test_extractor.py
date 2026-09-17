@@ -945,6 +945,73 @@ Authorized Signature
 """
 
 
+# Raw OCR text from the live app for the เอเชี่ยน โลจิสติกส์ invoice
+# INV-6802-0147 — ground truth. All three amounts were wrong, and this one
+# is entirely about damaged label text:
+#   - "รวมเงินทั้งสิ้น" (the GRAND total) was claimed by the subtotal keyword
+#     "รวมเงิน", which matched it first — so the total was filed as the
+#     pre-tax amount and the real total went missing.
+#   - OCR clipped the VAT label's first syllable: "ษีมูลค่าเพิ่ม 7%".
+#   - And mangled the subtotal label "มูลค่าสินค้า/บริการ" into
+#     "ทุกคาสินค้าบริการ".
+REAL_ASIAN_RAW_TEXT = """บริษัท เอเชี่ยน โลจิสติกส์ ซัพพลาย จำกัด
+99/12 หมู่ 4 ถนนบางนา-ตราด ตำบลบางแก้ว อำเภอบางพลี จังหวัดสมุทรปราการ
+10540
+เลขประจำตัวผู้เสียภาษี : 0105558012345 (สำนักงานใหญ่)
+โทร. 02-345-6789 | อีเมล : accounting@asianlogisticssupply.co.th
+ใบก๋ากับภาษี
+TAX INVOICE
+ต้นฉบับ / ORIGINAL
+ลูกค้า (Customer) :
+บริษัท C จำกัด
+456/89 ถนนสุขุมวิท ตำบลบางเมือง อำเภอเมืองสมุทรปราการ จังหวัดสมุทรปราการ
+10270
+เลขประจำตัวผู้เสียภาษี : 0115569345678
+เลขที่ใบกำกับภาษี
+: INV-6802-0147
+วันที่
+เลขที่ใบสั่งซื้อ
+: 18 มกราคม 2568
+: PO-2568-0223
+เงื่อนไขการชำระเงิน : เครดิต 30 วัน
+ล่าดับ
+รายการ
+1 ค่าบริการขนส่งสินค้า เดือนมกราคม 2568
+2
+ค่าบรรจุภัณฑ์และวัสดุห่อหุ้ม
+3
+ค่าธรรมเนียมจัดเก็บสินค้าคลังสินค้า
+จำนวนเงินรวมทั้งสิ้น (ตัวอักษร) :
+หกหมื่นสามพันเก้าสิบห้าบาทถ้วน
+ผู้รับสินค้า / Received by
+จำนวน
+หน่วย
+ราคาต่อหน่วย
+(บาท)
+จำนวนเงิน (บาท)
+1
+งาน
+45,000.00
+45,000,00
+200
+อื่น
+35.00
+7,000.00
+1
+งาน
+8,500.00
+8,500.00
+ทุกคาสินค้าบริการ
+60,500.00
+ษีมูลค่าเพิ่ม 7%
+4,235.00
+รวมเงินทั้งสิ้น
+64,735.00
+ผู้มีอำนาจลงนาม / Authorized signature
+เอกสารนี้จัดทาขึ้นเพื่อการทดสอบระบบเท่านั้น (This document is generated for system testing purposes only)
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -1320,6 +1387,46 @@ def main():
     all_ok &= check(
         "an English company name IS still a valid buyer",
         extractor._is_plausible_buyer_name(extractor._clean_buyer_value("ABC Co., Ltd.")),
+    )
+
+    # regression: the เอเชี่ยน โลจิสติกส์ invoice (see REAL_ASIAN_RAW_TEXT)
+    fields13 = extractor.extract_fields(REAL_ASIAN_RAW_TEXT, ocr_confidence=90.0)
+    print("\n--- Real เอเชี่ยน โลจิสติกส์ OCR text fields ---")
+    for k, v in fields13.items():
+        print(f"  {k}: {v}")
+    all_ok &= check("real asian: subtotal = 60500.0 (was the total)", fields13["subtotal"] == 60500.00)
+    all_ok &= check("real asian: vat = 4235.0 (was missing)", fields13["vat"] == 4235.00)
+    all_ok &= check("real asian: total = 64735.0 (was missing)", fields13["total"] == 64735.00)
+    all_ok &= check("real asian: invoice_no", fields13["invoice_no"] == "INV-6802-0147")
+    all_ok &= check("real asian: date = 2025-01-18", fields13["invoice_date_iso"] == "2025-01-18")
+    all_ok &= check("real asian: buyer_name", fields13["buyer_name"] == "บริษัท C จำกัด")
+    all_ok &= check("real asian: classified เต็มรูป", fields13["doc_type"] == "เต็มรูป")
+    all_ok &= check("real asian: not flagged for review", fields13["needs_review"] is False)
+
+    # damaged label text the extractor now has to survive
+    all_ok &= check(
+        "'รวมเงินทั้งสิ้น' is the grand total, not the subtotal",
+        extractor._classify_totals_label("รวมเงินทั้งสิ้น") == "total",
+    )
+    all_ok &= check(
+        "plain 'รวมเงิน' is still the subtotal",
+        extractor._classify_totals_label("รวมเงิน 2,000.00") == "subtotal",
+    )
+    all_ok &= check(
+        "'ษีมูลค่าเพิ่ม 7%' (clipped syllable) is still the VAT",
+        extractor._classify_totals_label("ษีมูลค่าเพิ่ม 7%") == "vat",
+    )
+    all_ok &= check(
+        "the clipped form still can't hijack the VATable-goods line",
+        extractor._classify_totals_label("สินค้าที่เสียภาษีมูลค่าเพิ่ม") == "subtotal",
+    )
+    all_ok &= check(
+        "the clipped form still can't hijack the exempt-goods line",
+        extractor._classify_totals_label("สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม") == "exempt",
+    )
+    all_ok &= check(
+        "'ทุกคาสินค้าบริการ' (mangled มูลค่าสินค้า/บริการ) is the subtotal",
+        extractor._classify_totals_label("ทุกคาสินค้าบริการ") == "subtotal",
     )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the

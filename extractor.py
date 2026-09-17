@@ -75,7 +75,14 @@ DATE_TOKEN_RE = re.compile(r"\d{1,4}[/.\-]\d{1,2}[/.\-]\d{1,4}")
 # lines that merely mention VAT — "สินค้าที่เสียภาษีมูลค่าเพิ่ม" (the pre-tax
 # subtotal) and "สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม" (exempt goods). Reading
 # either as the VAT amount puts the wrong figure in the VAT box.
-VAT_KEYWORDS = [r"(?<!ที่เสีย)(?<!ยกเว้น)ภาษีมูลค่าเพิ่ม", r"VAT", r"Vat"]
+# "(?:ภา)?" — OCR clipped the first syllable off a real invoice's VAT line
+# ("ษีมูลค่าเพิ่ม 7%"), leaving no VAT amount at all. The exclusions are
+# repeated with that syllable attached so the shorter match can't sneak
+# past them by starting one syllable later.
+VAT_KEYWORDS = [
+    r"(?<!ที่เสีย)(?<!ยกเว้น)(?<!ที่เสียภา)(?<!ยกเว้นภา)(?:ภา)?ษีมูลค่าเพิ่ม",
+    r"VAT", r"Vat",
+]
 # Most specific / least ambiguous first. "จำนวนเงิน" (bare, no suffix) is
 # deliberately last/lowest-priority — it's also part of the line-items
 # table's column header wording on some invoices ("...ราคา/หน่วย ส่วนลด
@@ -90,7 +97,14 @@ SUBTOTAL_KEYWORDS = [
     # the pre-tax subtotal. It has to be matched ahead of VAT_KEYWORDS,
     # which its own wording also matches.
     r"สินค้าที่เสียภาษีมูลค่าเพิ่ม", r"ที่เสียภาษีมูลค่าเพิ่ม",
-    r"รวมเป็นเงิน", r"รวมเงิน", r"After\s*Discount", r"Sub\s*Total", r"จำนวนเงิน",
+    # "มูลค่าสินค้า/บริการ" — matched loosely on "สินค้า...บริการ" because OCR
+    # mangles the front of it ("ทุกคาสินค้าบริการ" on a real invoice).
+    r"สินค้า\s*[/\s]?\s*บริการ",
+    # "รวมเงิน" must not swallow "รวมเงินทั้งสิ้น", which is the GRAND total —
+    # a real invoice had its total recorded as the pre-tax subtotal because
+    # this keyword matched that line first.
+    r"รวมเป็นเงิน", r"รวมเงิน(?!ทั้งสิ้?น|รวม|สุทธิ)",
+    r"After\s*Discount", r"Sub\s*Total", r"จำนวนเงิน",
 ]
 # "สิ้?น" — the MAI THO on สิ้น is optional on purpose. Confirmed on a real
 # invoice: Vision dropped the tone mark and read the grand-total label as
@@ -99,7 +113,9 @@ SUBTOTAL_KEYWORDS = [
 # Thai tone marks are small and the first thing a scan loses.
 TOTAL_KEYWORDS = [
     r"จำนวนเงิน(?:รวม)?ทั้งสิ้?น", r"จำนวนเงินรวมสุทธิ", r"รวมมูลค่าสุทธิ", r"มูลค่าสุทธิ",
-    r"รวมทั้งสิ้?น", r"ยอดรวมสุทธิ", r"ยอดรวม",
+    # "รวมทั้งสิ้น" with an optional word in the middle — invoices write
+    # "รวมเงินทั้งสิ้น", "รวมมูลค่าทั้งสิ้น", "รวมราคาทั้งสิ้น" for the same thing.
+    r"รวม(?:เงิน|มูลค่า|ราคา|จำนวนเงิน)?ทั้งสิ้?น", r"ยอดรวมสุทธิ", r"ยอดรวม",
     r"Grand\s*Total", r"Total\s*Amount", r"Total",
 ]
 # "ลูกค้า" carries two negative lookbehinds so it matches the buyer-name
