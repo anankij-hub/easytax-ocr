@@ -1603,6 +1603,38 @@ def main():
         extractor.normalize_thai_text("ราคา มูลค่าเพิ่ม ค่าบริการ") == "ราคา มูลค่าเพิ่ม ค่าบริการ",
     )
 
+    # regression: the December มั่งมีศรีสุข invoice INV-2568-12, dated
+    # 31/12/2568, which was filed as 2026-01-03 — a date lifted from the
+    # holiday notice among the terms at the foot of the page ("...คำสั่งซื้อ
+    # ดำเนินการต่ออีกครั้งวันที่ 3 มกราคม 2569"). The document box had the
+    # right date paired with the invoice number all along; extract_fields
+    # was only reading the number out of it.
+    december = extractor.extract_fields(
+        REAL_MUNGMEE_RAW_TEXT
+        .replace("นามผู้ชื้อ / Name", "นามผู้ซื้อ / Name")
+        .replace("INV-2568-01", "INV-2568-12")
+        .replace("31/01/2568", "31/12/2568")
+        + "- ปิดทำการวันหยุดปีใหม่ 30 ธันวาคม 2568 - 2 มกราคม 2569 "
+          "คำสั่งซื้อดำเนินการต่ออีกครั้งวันที่ 3 มกราคม 2569\n",
+        ocr_confidence=90.0,
+    )
+    all_ok &= check(
+        "december mungmee: date = 2025-12-31 (not the holiday notice's date)",
+        december["invoice_date_iso"] == "2025-12-31",
+    )
+    all_ok &= check("december mungmee: invoice_no", december["invoice_no"] == "INV-2568-12")
+    all_ok &= check(
+        "a date inside a sentence is not the document's date",
+        extractor.extract_date(
+            "- ปิดทำการวันหยุดปีใหม่ 30 ธันวาคม 2568 - 2 มกราคม 2569 "
+            "คำสั่งซื้อดำเนินการต่ออีกครั้งวันที่ 3 มกราคม 2569\n"
+        )[1] != "2026-01-03",
+    )
+    all_ok &= check(
+        "a short 'วันที่ ...' field line still supplies the date",
+        extractor.extract_date("วันที่ 31/12/2568\n") == ("31/12/2568", "2025-12-31"),
+    )
+
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
     # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the
     # items table instead of the ชื่อลูกค้า value. Each case below is a way a

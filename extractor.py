@@ -539,10 +539,24 @@ def _in_signature_block(text, pos, lookback=2):
     return any(SIGNATURE_CONTEXT_RE.search(l) for l in around)
 
 
+# A "วันที่" inside a long line is part of a sentence — the terms and
+# conditions at the foot of the page talk about payment deadlines, holiday
+# closures and return windows, and the dates in them are not the
+# document's date. Field labels are short.
+_PROSE_LINE_MIN_LEN = 80
+
+
+def _in_prose_line(text, pos):
+    line_start = text.rfind("\n", 0, pos) + 1
+    line_end = text.find("\n", pos)
+    line = text[line_start:line_end if line_end != -1 else len(text)]
+    return len(line.strip()) > _PROSE_LINE_MIN_LEN
+
+
 def extract_date(text):
     for kw in DATE_KEYWORDS:
         for m in re.finditer(kw, text):
-            if _in_signature_block(text, m.start()):
+            if _in_signature_block(text, m.start()) or _in_prose_line(text, m.start()):
                 continue
             # Window needs to be wide enough to skip past an intervening
             # bilingual English sub-label (e.g. "วันที่เอกสาร\nDocument
@@ -1319,6 +1333,19 @@ def extract_fields(text, ocr_confidence=None):
 
     doc_info_block = _extract_doc_info_block(text)
     invoice_no = doc_info_block.get("doc_no") or extract_invoice_no(text)
+
+    # The document box pairs its date with its number by position, which
+    # beats hunting for a "วันที่" keyword — on a column-major read the real
+    # date label is nowhere near its value, and the scan can wander into
+    # the terms printed at the foot of the page. Confirmed live: an invoice
+    # dated 31/12/2568 was filed as 2026-01-03, taken from "...คำสั่งซื้อ
+    # ดำเนินการต่ออีกครั้งวันที่ 3 มกราคม 2569" in the holiday notice. Only
+    # used when it parses, so a mispaired block can't override a good date.
+    block_date = doc_info_block.get("doc_date")
+    if block_date:
+        block_iso = _parse_thai_date(block_date)
+        if block_iso:
+            date_raw, date_iso = block_date, block_iso
 
     totals_block = _extract_totals_block(text)
     subtotal = (_clean_number(totals_block["subtotal"]) if "subtotal" in totals_block
