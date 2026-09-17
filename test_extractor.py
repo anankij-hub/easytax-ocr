@@ -1894,6 +1894,66 @@ def main():
         all_ok &= check(f"clean buyer value {raw!r} -> {want!r}",
                         extractor._clean_buyer_value(raw) == want)
 
+    # regression: a second ฟาร์มเงินฟาร์มทอง invoice, INV-2568-004, where the
+    # totals box lost to three separate problems at once:
+    #   - OCR dropped the whole signature block INTO the label run, so the
+    #     run broke in two and the box ended up with five labels against
+    #     six figures — no exact-length pairing was possible.
+    #   - "รวมเงิน" and its English twin "Total" classify differently
+    #     (subtotal vs grand total), splitting one field into two labels.
+    #   - "รวมราคาสินค้า" matched nothing (the keyword was the other word
+    #     order, "ราคารวมสินค้า").
+    # And the fallback keyword search then read "1" out of the numbered
+    # conditions ("1. สินค้าตามใบส่งสินค้านี้...") because its window pass
+    # didn't skip the items-table column headings the line pass skips.
+    farm2 = extractor.extract_fields(
+        "ต้นฉบับใบกำกับภาษี/ใบส่งสินค้า\nเลขที่\nNo.\nINV-2568-004\nวันที่\nDate\n30/04/2568\n"
+        "ชื่อลูกค้า\nCustomer Name\nบริษัท ฟาร์มเงินฟาร์มทอง จำกัด\n"
+        "FARM NGERN FARM THONG CO., LTD.\n"
+        "เลขประจำตัวผู้เสียภาษีอากร 0173568002246 (สำนักงานใหญ่)\nบริษัท A จำกัด\n"
+        "จำนวนเงิน\nAmount\n25,500.00\n120\n780.00\n93,600.00\n"
+        "1. สินค้าตามใบส่งสินค้านี้ หากมีการแตกร้าวหรือชำรุดเสียหาย กรุณาแจ้งกลับภายใน 3 วัน\n"
+        "รวมเงิน\nTotal\n"
+        "ได้รับสินค้าตามรายการถูกต้องเรียบร้อยแล้ว\nReceived the above goods in good condition\n"
+        "ผู้รับสินค้า .\nReceived by\nผู้ส่งสินค้า\nDelivery by\nวันที่ 30/04/2568\n"
+        "หักเงินมัดจำ\nDeposit\nหักส่วนลด\nDiscount\nรวมราคาสินค้า\nSub Total\n"
+        "ภาษีมูลค่าเพิ่ม\nVAT\nจำนวนเงินรวมทั้งสิ้น\nGrand Total\n"
+        "ในนาม บริษัท ฟาร์มเงินฟาร์มทอง จำกัด\nผู้มีอำนาจลงนาม\nAuthorized Signature\n"
+        "119,100.00\n0.00\n0.00\n119,100.00\n8,337.00\n127,437.00\n",
+        ocr_confidence=90.0,
+    )
+    all_ok &= check("farm2: subtotal = 119100.0 (was 1)", farm2["subtotal"] == 119100.00)
+    all_ok &= check("farm2: vat = 8337.0 (was missing)", farm2["vat"] == 8337.00)
+    all_ok &= check("farm2: total = 127437.0 (was missing)", farm2["total"] == 127437.00)
+    all_ok &= check("farm2: invoice_no", farm2["invoice_no"] == "INV-2568-004")
+    all_ok &= check("farm2: not flagged for review", farm2["needs_review"] is False)
+
+    all_ok &= check(
+        "'รวมราคาสินค้า' is the subtotal (either word order)",
+        extractor._classify_totals_label("รวมราคาสินค้า") == "subtotal",
+    )
+    all_ok &= check(
+        "a bare English 'Total' is recognised as a label's translated twin",
+        bool(extractor.GENERIC_TOTALS_WORD_RE.match("Total")),
+    )
+    all_ok &= check(
+        "'จำนวนเงินรวมทั้งสิ้น' is not a generic English word",
+        extractor.GENERIC_TOTALS_WORD_RE.match("จำนวนเงินรวมทั้งสิ้น") is None,
+    )
+    # a guessed alignment is only accepted when the amounts agree
+    all_ok &= check(
+        "an unsound alignment is rejected",
+        extractor._totals_pairing_is_sound(
+            {"subtotal": "100.00", "vat": "900.00", "total": "1,000.00"}
+        ) is False,
+    )
+    all_ok &= check(
+        "a sound alignment is accepted",
+        extractor._totals_pairing_is_sound(
+            {"subtotal": "119,100.00", "vat": "8,337.00", "total": "127,437.00"}
+        ),
+    )
+
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
     # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the
     # items table instead of the ชื่อลูกค้า value. Each case below is a way a

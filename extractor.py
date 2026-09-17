@@ -101,7 +101,7 @@ VAT_KEYWORDS = [
 # just "จำนวนเงิน" / "SUB TOTAL".
 SUBTOTAL_KEYWORDS = [
     r"มูลค่าหลังส่วนลด", r"จำนวนเงินหลังหักส่วนลด", r"หลังหักส่วนลด",
-    r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า", r"ราคารวมสินค้า",
+    r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า", r"ราคารวมสินค้า", r"รวมราคาสินค้า",
     # An invoice that carries both VATable and VAT-exempt goods states the
     # VATable base on its own line ("สินค้าที่เสียภาษีมูลค่าเพิ่ม") — that IS
     # the pre-tax subtotal. It has to be matched ahead of VAT_KEYWORDS,
@@ -376,10 +376,10 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
             # could still read a figure off a table heading or an
             # amount-in-words line.
             if skip_header_lines:
-                line_start = text.rfind("\n", 0, m.start()) + 1
-                line_end = text.find("\n", m.start())
-                on_line = text[line_start:line_end if line_end != -1 else len(text)]
-                if TABLE_HEADER_LINE_RE.search(on_line):
+                line_no = text.count("\n", 0, m.start())
+                on_line = lines[line_no] if line_no < len(lines) else ""
+                if (TABLE_HEADER_LINE_RE.search(on_line)
+                        or _is_table_column_header(lines, line_no)):
                     continue
             window_text = text[m.end():m.end() + window + _WINDOW_OVERRUN]
             val = _best_match_on_line(window_text, value_pattern,
@@ -1210,6 +1210,18 @@ PURE_NUMBER_LINE_RE = re.compile(
 )
 
 
+# A bare English totals word carries no information of its own — it is the
+# translation of the Thai label above it. Needed because such a pair can
+# classify to DIFFERENT keys: "รวมเงิน" reads as the subtotal while its twin
+# "Total" reads as the grand total, which split one field into two labels
+# and threw the whole box out of alignment with its values.
+GENERIC_TOTALS_WORD_RE = re.compile(
+    r"^(?:Grand\s*)?(?:Sub\s*)?(?:Total|Amount|Discount|Deposit|VAT(?:\s*7\s*%?)?|"
+    r"Net\s*Total|Balance)\s*$",
+    re.IGNORECASE,
+)
+
+
 def _is_translation_pair(a, b):
     """True when two label lines look like the Thai and English halves of
     ONE field ("ภาษีมูลค่าเพิ่ม 7%" / "VAT 7%") rather than two separate
@@ -1263,17 +1275,21 @@ def _extract_totals_block(text):
     for start in range(n):
         labels = []
         last_label = ""
+        last_label_idx = -2
         j = start
         unclassified_streak = 0
         while (j < n and lines[j] and not PURE_NUMBER_LINE_RE.match(lines[j])
                and not TABLE_HEADER_LINE_RE.search(lines[j])):
             key = _classify_totals_label(lines[j])
             if key is not None:
-                if labels and labels[-1] == key and _is_translation_pair(last_label, lines[j]):
+                twin = labels and last_label_idx == j - 1 and _is_translation_pair(
+                    last_label, lines[j]
+                ) and (labels[-1] == key or GENERIC_TOTALS_WORD_RE.match(lines[j].strip()))
+                if twin:
                     pass  # the English half of the label above — one field
                 else:
                     labels.append(key)
-                last_label = lines[j]
+                last_label, last_label_idx = lines[j], j
                 unclassified_streak = 0
             else:
                 unclassified_streak += 1
@@ -1304,13 +1320,36 @@ def _extract_totals_block(text):
             values.append(lines[k])
             k += 1
         if len(values) == len(labels):
-            result = {}
-            for key, val in zip(labels, values):
-                result[key] = val  # a later same-key label (e.g. the
-                # post-discount subtotal) intentionally overwrites an
-                # earlier one, matching _find_after_keyword's own priority
-            return result
+            return _pair_totals(labels, values)
+        # More figures than labels means a label went missing — typically
+        # the first, when OCR drops the signature block into the middle of
+        # the label run and breaks it in two (confirmed live: five labels
+        # against six figures). Try aligning from the end, then from the
+        # start, and accept only a pairing the arithmetic agrees with.
+        if len(values) > len(labels):
+            for offset in (len(values) - len(labels), 0):
+                candidate = _pair_totals(labels, values[offset:offset + len(labels)])
+                if _totals_pairing_is_sound(candidate):
+                    return candidate
     return {}
+
+
+def _pair_totals(labels, values):
+    result = {}
+    for key, val in zip(labels, values):
+        result[key] = val  # a later same-key label (e.g. the post-discount
+        # subtotal) intentionally overwrites an earlier one, matching
+        # _find_after_keyword's own priority
+    return result
+
+
+def _totals_pairing_is_sound(pairing):
+    """Only trust a guessed alignment if the three amounts it produces add
+    up and carry a correct 7% rate — a wrong offset cannot fake both."""
+    subtotal = _clean_number(pairing.get("subtotal"))
+    vat = _clean_number(pairing.get("vat"))
+    total = _clean_number(pairing.get("total"))
+    return _amounts_balance(subtotal, vat, total) and _vat_rate_ok(subtotal, vat)
 
 
 # Some invoices' document-info box (เลขที่เอกสาร/วันที่เอกสาร/เลขที่เอกสารอ้างอิง/
