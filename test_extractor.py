@@ -625,6 +625,109 @@ LO
 """
 
 
+# Raw OCR text from the live app for the มั่งมีศรีสุข invoice INV-2568-01 —
+# ground truth, and the worst one so far: four independent failures at once.
+#   - OCR wrote the decimal points as COMMAS ("15,750,00", "1,102,50"), so
+#     stripping thousands separators inflated every amount a hundredfold.
+#   - This invoice separates VATable from exempt goods, and BOTH labels
+#     ("สินค้าที่เสียภาษีมูลค่าเพิ่ม", "สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม") contain the
+#     word VAT, so both classified as the VAT amount.
+#   - "รวมมูลค่าสุทธิ" (net total) and "หัก เงิน จ๋า" (a garbled deposit
+#     deduction) matched nothing, breaking the label run.
+#   - The number label lost its tone mark ("เลขที / NO") and its value sits
+#     seven lines away in a column-major box, so no invoice number was
+#     found at all — which alone downgraded a full tax invoice to ใบย่อ and
+#     wiped its subtotal and VAT.
+REAL_MUNGMEE_RAW_TEXT = """มศส
+เลขประจำตัวผู้เสียภาษีอากร
+0105568000222
+บริษัท มั่งมีศรีสุข จำกัด (สำนักงานใหญ่)
+MUNGMEE SRISUK CO., LTD. (Head Office)
+88/8 อาคารมั่งมีศรีสุข ชั้น 12 ถนนรัชดาภิเษก แขวงห้วยขวาง เขตห้วยขวาง กรุงเทพมหานคร 10310
+88/8 Mungmee Srisuk Building, 12th Floor, Ratchadaphisek Rd., Huai Khwang, Bangkok 10310
+โทร./Tel. 02-988-1234 E-mail : sales@mungmeesrisuk.example
+ใบเสร็จรับเงิน / ใบกำกับภาษี
+RECEIPT / TAX INVOICE
+งวดประจำเดือนมกราคม 2568
+นามผู้ชื้อ / Name
+บริษัท A จำกัด
+ที่อยู่ / Address
+99/15 ถนนวิภาวดีรังสิต แขวงจอมพล เขตจตุจักร กรุงเทพมหานคร 10900
+เลขประจำตัวผู้เสียภาษีอากร / Tax ID
+0105569123456
+เลขที / NO
+วันที่ / DATE
+เครดิต / CREDIT
+วันครบกำาหนด/DUE DATE
+เลขที่ใบสั่งซื้อ / PO.NO
+พนักงานขาย / SALEMAN
+รหัสลูกค้า / CUSTOMER
+INV-2568-01
+31/01/2568
+30 วัน
+02/03/2568
+PO-2568-0105
+สมหญิง รักงาน
+CUS-0088
+าบที
+ITEM
+รายการ
+DESCRIPTION
+จำนวน
+หน่วยนับ
+ราคาต่อหน่วย
+ส่วนลดต่อหน่วย
+V/N*
+QUANTITY
+UNIT
+UNIT PRICE
+DISCOUNT
+1
+ชุดกระเช้าของขวัญปีใหม่
+2
+การ์ดอวยพรปีใหม่
+หมายเหตุ * (V ภาษีมูลค่าเพิ่ม / N ยกเว้นภาษีมูลค่าเพิ่ม)
+จำนวนเงินรวม (ตัวอักษร)
+GRAND TOTAL (ALPHABET)
+V
+ท
+15
+เช็ต
+890.00
+40.00
+หน้าที่ 1/1
+จำนวนเงินบาท
+AMOUNT (BAHT)
+12,750.00
+V
+200
+ไป
+15.00
+0,00
+3,000,00
+หนึ่งหมื่นหกพันแปดร้อยห้าสิบสองบาทห้าสิบสตางค์
+- สินค้าตามใบกำกับภาษีนี้ แม้จะส่งมอบแก่ผู้ซื้อแล้วก็ยังคงเป็นทรัพย์สินของผู้ขายจนกว่าผู้ซื้อได้ชำระเงินเรียบร้อยแล้ว
+- โปรดสั่งจ่ายเช็คขีดคร่อมในนาม "บริษัท มั่งมีศรีสุข จำกัด" เท่านั้น
+- การชำระเงินด้วยเช็คจะสมบูรณ์ต่อเมื่อได้รับเงินตามเช็คเรียบร้อยแล้ว
+- ถ้าสินค้าไม่ถูกต้องโปรดแจ้งกลับภายใน 7 วัน หากเกินกำหนดทางบริษัทขอสงวนสิทธิ์ในการเปลี่ยนหรือคืน
+ราคาพิเศษช่วงปีใหม่ สินค้าตามรายการนี้ไม่รับเปลี่ยนคืนหลังวันที่ 15 มกราคม
+สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม
+สินค้าที่เสียภาษีมูลค่าเพิ่ม
+ภาษีมูลค่าเพิ่ม VAT7%
+หัก เงิน จ๋า
+รวมมูลค่าสุทธิ
+บริษัท มั่งมีศรีสุข จำกัด
+gA
+ผู้มีอานาจลงนาม
+AUTHORIZED SIGNATURE
+0.00
+15,750,00
+1,102,50
+0.00
+16,852.50
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -830,6 +933,57 @@ def main():
     all_ok &= check("real barbara2: total = 3025.0", fields9["total"] == 3025.00)
     all_ok &= check("real barbara2: buyer_name", fields9["buyer_name"] == "บริษัท A จำกัด")
     all_ok &= check("real barbara2: not flagged for review", fields9["needs_review"] is False)
+
+    # regression: the มั่งมีศรีสุข invoice (see REAL_MUNGMEE_RAW_TEXT) — four
+    # independent failures in one document
+    fields10 = extractor.extract_fields(REAL_MUNGMEE_RAW_TEXT, ocr_confidence=90.0)
+    print("\n--- Real มั่งมีศรีสุข OCR text fields ---")
+    for k, v in fields10.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real mungmee: invoice_no = INV-2568-01 (label lost its tone mark)",
+        fields10["invoice_no"] == "INV-2568-01",
+    )
+    all_ok &= check(
+        "real mungmee: classified เต็มรูป (was downgraded to ย่อ)",
+        fields10["doc_type"] == "เต็มรูป",
+    )
+    all_ok &= check("real mungmee: subtotal = 15750.0", fields10["subtotal"] == 15750.00)
+    all_ok &= check("real mungmee: vat = 1102.5", fields10["vat"] == 1102.50)
+    all_ok &= check("real mungmee: total = 16852.5 (was 1)", fields10["total"] == 16852.50)
+    all_ok &= check("real mungmee: date = 2025-01-31", fields10["invoice_date_iso"] == "2025-01-31")
+    all_ok &= check("real mungmee: seller tax id", fields10["seller_tax_id"] == "0105568000222")
+    all_ok &= check("real mungmee: buyer_name", fields10["buyer_name"] == "บริษัท A จำกัด")
+    all_ok &= check("real mungmee: not flagged for review", fields10["needs_review"] is False)
+
+    # a comma standing in for the decimal point
+    all_ok &= check("'15,750,00' parses as 15750.0", extractor._clean_number("15,750,00") == 15750.0)
+    all_ok &= check("'1,102,50' parses as 1102.5", extractor._clean_number("1,102,50") == 1102.5)
+    all_ok &= check("'0,00' parses as 0.0", extractor._clean_number("0,00") == 0.0)
+    all_ok &= check("'1,234' is still one thousand two hundred",
+                    extractor._clean_number("1,234") == 1234.0)
+    all_ok &= check("'12,345,678' is still twelve million",
+                    extractor._clean_number("12,345,678") == 12345678.0)
+    all_ok &= check("'2,571.03' still parses", extractor._clean_number("2,571.03") == 2571.03)
+
+    # VATable vs exempt goods lines, and the labels that keep a totals block
+    # aligned with its values
+    all_ok &= check(
+        "'สินค้าที่เสียภาษีมูลค่าเพิ่ม' is the subtotal, not the VAT",
+        extractor._classify_totals_label("สินค้าที่เสียภาษีมูลค่าเพิ่ม") == "subtotal",
+    )
+    all_ok &= check(
+        "'สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม' is neither subtotal nor VAT",
+        extractor._classify_totals_label("สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม") == "exempt",
+    )
+    all_ok &= check(
+        "'ภาษีมูลค่าเพิ่ม VAT7%' is still the VAT",
+        extractor._classify_totals_label("ภาษีมูลค่าเพิ่ม VAT7%") == "vat",
+    )
+    all_ok &= check(
+        "'รวมมูลค่าสุทธิ' is the total",
+        extractor._classify_totals_label("รวมมูลค่าสุทธิ") == "total",
+    )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
     # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the

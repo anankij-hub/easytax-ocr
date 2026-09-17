@@ -49,12 +49,19 @@ THAI_MONTHS = {
     "ธันวาคม": 12, "ธ.ค.": 12, "ธ.ค": 12,
 }
 
+# "เลขที่?" — the MAI EK is optional for the same reason as in
+# TOTAL_KEYWORDS: OCR drops it. A real invoice's number label came through
+# as "เลขที / NO".
 INVOICE_NO_KEYWORDS = [
-    r"เลขที่ใบกำกับภาษี", r"เลขที่เอกสาร", r"เลขที่ใบเสร็จ", r"เลขที่",
+    r"เลขที่ใบกำกับภาษี", r"เลขที่เอกสาร", r"เลขที่ใบเสร็จ", r"เลขที่?",
     r"Invoice\s*No\.?", r"Tax\s*Invoice\s*No\.?", r"Document\s*No\.?", r"No\.",
 ]
 DATE_KEYWORDS = [r"วันที่", r"Date"]
-VAT_KEYWORDS = [r"ภาษีมูลค่าเพิ่ม", r"VAT", r"Vat"]
+# The lookbehinds keep "ภาษีมูลค่าเพิ่ม" from matching the two goods-total
+# lines that merely mention VAT — "สินค้าที่เสียภาษีมูลค่าเพิ่ม" (the pre-tax
+# subtotal) and "สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม" (exempt goods). Reading
+# either as the VAT amount puts the wrong figure in the VAT box.
+VAT_KEYWORDS = [r"(?<!ที่เสีย)(?<!ยกเว้น)ภาษีมูลค่าเพิ่ม", r"VAT", r"Vat"]
 # Most specific / least ambiguous first. "จำนวนเงิน" (bare, no suffix) is
 # deliberately last/lowest-priority — it's also part of the line-items
 # table's column header wording on some invoices ("...ราคา/หน่วย ส่วนลด
@@ -64,6 +71,11 @@ VAT_KEYWORDS = [r"ภาษีมูลค่าเพิ่ม", r"VAT", r"Vat"
 SUBTOTAL_KEYWORDS = [
     r"มูลค่าหลังส่วนลด", r"จำนวนเงินหลังหักส่วนลด", r"หลังหักส่วนลด",
     r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า", r"ราคารวมสินค้า",
+    # An invoice that carries both VATable and VAT-exempt goods states the
+    # VATable base on its own line ("สินค้าที่เสียภาษีมูลค่าเพิ่ม") — that IS
+    # the pre-tax subtotal. It has to be matched ahead of VAT_KEYWORDS,
+    # which its own wording also matches.
+    r"สินค้าที่เสียภาษีมูลค่าเพิ่ม", r"ที่เสียภาษีมูลค่าเพิ่ม",
     r"รวมเป็นเงิน", r"รวมเงิน", r"After\s*Discount", r"Sub\s*Total", r"จำนวนเงิน",
 ]
 # "สิ้?น" — the MAI THO on สิ้น is optional on purpose. Confirmed on a real
@@ -72,7 +84,8 @@ SUBTOTAL_KEYWORDS = [
 # failed to pair up and the amounts came out of unrelated table cells.
 # Thai tone marks are small and the first thing a scan loses.
 TOTAL_KEYWORDS = [
-    r"จำนวนเงิน(?:รวม)?ทั้งสิ้?น", r"จำนวนเงินรวมสุทธิ", r"รวมทั้งสิ้?น", r"ยอดรวมสุทธิ", r"ยอดรวม",
+    r"จำนวนเงิน(?:รวม)?ทั้งสิ้?น", r"จำนวนเงินรวมสุทธิ", r"รวมมูลค่าสุทธิ", r"มูลค่าสุทธิ",
+    r"รวมทั้งสิ้?น", r"ยอดรวมสุทธิ", r"ยอดรวม",
     r"Grand\s*Total", r"Total\s*Amount", r"Total",
 ]
 # "ลูกค้า" carries two negative lookbehinds so it matches the buyer-name
@@ -137,11 +150,22 @@ TAXID_PLAIN_RE = re.compile(r"\b\d{13}\b")
 # printed this way, which made the extractor report no amounts at all.
 TRAILING_DASH_SATANG_RE = re.compile(r"\s*[.,]-\s*$")
 
+# OCR also reads the decimal point as a comma: a real invoice came through
+# with "15,750,00" and "1,102,50" for 15,750.00 and 1,102.50. Stripping the
+# commas as thousands separators turned those into 1,575,000 and 110,250 —
+# a hundredfold error, silently recorded. A trailing group of exactly TWO
+# digits after a comma can only be satang, since a thousands group is
+# always three digits.
+COMMA_DECIMAL_RE = re.compile(r"^([-+]?\d{1,3}(?:,\d{3})*),(\d{2})$")
+
 
 def _clean_number(s):
     if s is None:
         return None
     s = TRAILING_DASH_SATANG_RE.sub("", s.translate(THAI_DIGITS).strip())
+    m = COMMA_DECIMAL_RE.match(s)
+    if m:
+        s = f"{m.group(1)}.{m.group(2)}"
     s = s.replace(",", "").strip()
     try:
         return float(s)
@@ -835,9 +859,16 @@ def build_review_reasons(fields):
 # ("จำนวนเงินทั้งสิ้น", "จำนวนเงินรวมสุทธิ"), so checking it at the same
 # priority as everything else would misclassify a real total line as a
 # subtotal just because "จำนวนเงิน" happens to also be a prefix of it.
+# "exempt" and "deduct" are here purely to keep the label run aligned with
+# the value run. A totals box lists every line it has — VAT-exempt goods,
+# a deposit deduction — and the pairing is positional, so a label this
+# didn't recognize used to drop out of the list and shift every figure
+# after it onto the wrong field. Their values are matched and discarded.
 _TOTALS_BLOCK_KEYS = [
+    ("exempt", [r"ยกเว้นภาษีมูลค่าเพิ่ม", r"ยกเว้น\s*VAT", r"Non[-\s]?VAT", r"VAT\s*Exempt"]),
     ("subtotal", [kw for kw in SUBTOTAL_KEYWORDS if kw != r"จำนวนเงิน"]),
     ("discount", [r"ส่วนลด", r"Discount"]),
+    ("deduct", [r"หัก\s*เงิน", r"เงินมัดจำ", r"หักมัดจำ", r"Deposit", r"Deduct"]),
     ("vat", VAT_KEYWORDS),
     ("total", TOTAL_KEYWORDS),
 ]
@@ -946,12 +977,23 @@ def _extract_totals_block(text):
 # at all, e.g. an empty Purchase Order No.), so the value run can be
 # SHORTER than the label run — pair up to the shorter length instead of
 # requiring an exact match.
+# A bilingual document box labels the same fields as "เลขที่ / NO.",
+# "วันที่ / DATE", "เครดิต / CREDIT", ... — the doc_no/doc_date patterns for
+# those are anchored to the whole line so they can't swallow
+# "เลขที่ใบสั่งซื้อ / PO.NO", which is a different field checked further
+# down. credit/due_date/salesman/customer_code carry no data we keep; they
+# exist so every label in the box classifies and the positional pairing
+# with the value run stays aligned.
 _DOC_INFO_BLOCK_KEYS = [
-    ("doc_no", [r"เลขที่เอกสาร(?!อ้างอิง)", r"Document\s*No"]),
-    ("doc_date", [r"วันที่เอกสาร(?!อ้างอิง)", r"Document\s*Date"]),
+    ("doc_no", [r"เลขที่เอกสาร(?!อ้างอิง)", r"Document\s*No", r"^เลขที่?\s*[/／]\s*No\.?\s*$"]),
+    ("doc_date", [r"วันที่เอกสาร(?!อ้างอิง)", r"Document\s*Date", r"^วันที่?\s*[/／]\s*Date\.?\s*$"]),
     ("doc_ref_no", [r"เลขที่เอกสารอ้างอิง", r"Document\s*Ref"]),
     ("doc_ref_date", [r"วันที่เอกสารอ้างอิง", r"Date\s*of\s*Ref"]),
-    ("po_no", [r"เลขที่ใบสั่งซื้อ", r"Purchase\s*Order\s*No"]),
+    ("credit", [r"^เครดิต\s*[/／]?", r"^Credit\b"]),
+    ("due_date", [r"วันครบกำ?าหนด", r"Due\s*Date"]),
+    ("po_no", [r"เลขที่ใบสั่งซื้อ", r"Purchase\s*Order\s*No", r"PO\.?\s*No"]),
+    ("salesman", [r"พนักงานขาย", r"Sale?s?man"]),
+    ("customer_code", [r"รหัสลูกค้า", r"Customer\s*(?:Code|No)", r"^.{0,20}[/／]\s*CUSTOMER\s*$"]),
 ]
 
 # A "value" line here is a single alphanumeric token with no spaces (a doc
