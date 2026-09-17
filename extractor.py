@@ -669,7 +669,11 @@ def _clean_buyer_value(val):
     """Strip separator punctuation off the front of a captured buyer name
     and cut it at the next field's label if OCR merged two boxes together."""
     val = (val or "").strip()
-    val = re.sub(r"^[:：\-–]+\s*", "", val).strip()
+    # "/" and "|" are separators too: a bilingual label is written
+    # "นามผู้ซื้อ / Name", and matching the Thai half leaves "/ Name" behind.
+    # Stripping the slash reduces it to "Name", which the label blocklist
+    # then recognises — without it, "/ Name" was recorded as a buyer.
+    val = re.sub(r"^[:：\-–/|｜]+\s*", "", val).strip()
     # A bilingual label pair prints both halves before the value
     # ("ชื่อลูกค้า/Customer Name : บริษัท เอ จำกัด"). The keyword match only
     # consumes the Thai half, leaving "/Customer Name : " glued to the front
@@ -694,6 +698,12 @@ def _is_plausible_buyer_name(val):
     if _BUYER_JUNK_VALUE_RE.match(val):
         return False
     if DOC_FURNITURE_RE.search(val):
+        return False
+    # An English label half that the blocklist doesn't list verbatim
+    # ("Customer Name", "Buyer Company"): Latin text that is itself one of
+    # the buyer-label keywords is a label, not a name. A genuinely English
+    # buyer ("ABC Co., Ltd.") matches no keyword and still passes.
+    if _is_latin_script(val) and any(re.search(k, val, re.IGNORECASE) for k in BUYER_KEYWORDS):
         return False
     return bool(re.search(r"[ก-๙A-Za-z]{2,}", val))
 

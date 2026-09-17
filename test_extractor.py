@@ -1292,6 +1292,36 @@ def main():
         extractor._is_latin_script("บริษัท A จำกัด") is False,
     )
 
+    # regression: the March มั่งมีศรีสุข invoice INV-2568-03 — same template
+    # as REAL_MUNGMEE_RAW_TEXT, but OCR spelled the buyer label correctly
+    # this time ("นามผู้ซื้อ / Name", not "นามผู้ชื้อ"). The keyword therefore
+    # matched, and the English half left on the line after it — "/ Name" —
+    # was recorded as the buyer. The misspelled month's copy had masked
+    # this: with no keyword match it reached the value by another route.
+    march = extractor.extract_fields(
+        REAL_MUNGMEE_RAW_TEXT
+        .replace("นามผู้ชื้อ / Name", "นามผู้ซื้อ / Name")
+        .replace("INV-2568-01", "INV-2568-03"),
+        ocr_confidence=90.0,
+    )
+    all_ok &= check(
+        "bilingual label: buyer is the value, not the label's English half",
+        march["buyer_name"] == "บริษัท A จำกัด",
+    )
+    all_ok &= check("march mungmee: invoice_no", march["invoice_no"] == "INV-2568-03")
+    all_ok &= check(
+        "'/ Name' left over from a bilingual label is not a buyer name",
+        extractor._is_plausible_buyer_name(extractor._clean_buyer_value(" / Name")) is False,
+    )
+    all_ok &= check(
+        "'/ Customer Name' is not a buyer name either",
+        extractor._is_plausible_buyer_name(extractor._clean_buyer_value(" / Customer Name")) is False,
+    )
+    all_ok &= check(
+        "an English company name IS still a valid buyer",
+        extractor._is_plausible_buyer_name(extractor._clean_buyer_value("ABC Co., Ltd.")),
+    )
+
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
     # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the
     # items table instead of the ชื่อลูกค้า value. Each case below is a way a
