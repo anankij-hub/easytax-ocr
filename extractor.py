@@ -141,7 +141,18 @@ BUYER_KEYWORDS = [
 # before it, so searching forward from it grabbed unrelated text below.
 # extract_buyer_name() handles that specific case separately by checking
 # the line *before* "Buyer Name" first.
-TAXINV_MARKER = r"ใบกำกับภาษี"
+# What makes a document a ใบกำกับภาษี at all — so this one word decides
+# whether VAT can be claimed. Two allowances, both from real documents:
+#
+#   - The vowel between ก and กับ is whatever OCR made of SARA AM. Seen as
+#     "ใบก๋ากับภาษี" (MAI CHATTAWA + SARA AA) — that single garbled letter
+#     was the only occurrence in the document, so a full tax invoice was
+#     filed as ใบย่อ and its subtotal and VAT were wiped as required by
+#     ม.86/6. The character class is Thai vowel signs and tone marks only.
+#     (A blanket "tone mark + า -> ำ" normalisation is NOT safe: "ค่า" is a
+#     real syllable, and it would corrupt "มูลค่า", "ราคา", "ค่าบริการ".)
+#   - The English title, which survives Thai garbling untouched.
+TAXINV_MARKER = r"ใบก[ั-๎]{0,2}กับภาษี|(?i:TAX\s*INVOICE)"
 RECEIPT_MARKER = r"ใบเสร็จรับเงิน"
 
 # A line that is clearly part of the line-items table header (not a data

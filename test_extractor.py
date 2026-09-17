@@ -4,6 +4,7 @@ These feed in text that approximates what Tesseract would output for a
 Thai tax invoice, so we can validate the regex/field-extraction logic on
 its own. Run: python3 test_extractor.py
 """
+import re
 import sys
 
 import extractor
@@ -1563,6 +1564,43 @@ def main():
             "จำนวนเงินรวมทั้งสิ้น (ตัวอักษร)\nรวมมูลค่าสินค้า\n35,350.00\n",
             extractor.TOTAL_KEYWORDS,
         ) is None,
+    )
+
+    # regression: JP invoice IV6800413-079, whose ONLY occurrence of the
+    # words "ใบกำกับภาษี" came through as "ใบก๋ากับภาษี" (SARA AM read as MAI
+    # CHATTAWA + SARA AA). With no tax-invoice marker the document was
+    # classified ใบย่อ, and ม.86/6 then wiped its subtotal and VAT — both
+    # of which had in fact been extracted correctly. One garbled letter
+    # cost three fields and the VAT deduction.
+    jp2 = extractor.extract_fields(
+        REAL_JP_RAW_TEXT
+        .replace("ใบกำกับภาษี/ใบเสร็จรับเงิน", "ใบก๋ากับภาษี/ใบเสร็จรับเงิน")
+        .replace("IV6800413-039", "IV6800413-079"),
+        ocr_confidence=92.0,
+    )
+    all_ok &= check("garbled marker: still เต็มรูป", jp2["doc_type"] == "เต็มรูป")
+    all_ok &= check("garbled marker: subtotal survives", jp2["subtotal"] == 1300.0)
+    all_ok &= check("garbled marker: vat survives", jp2["vat"] == 91.0)
+    all_ok &= check("garbled marker: total", jp2["total"] == 1391.0)
+    for spelling in ["ใบกำกับภาษี", "ใบก๋ากับภาษี", "ใบกํากับภาษี", "ใบกากับภาษี"]:
+        all_ok &= check(
+            f"'{spelling}' counts as a tax-invoice marker",
+            bool(re.search(extractor.TAXINV_MARKER, spelling)),
+        )
+    all_ok &= check(
+        "the English title alone counts as a marker",
+        bool(re.search(extractor.TAXINV_MARKER, "TAX INVOICE / RECEIPT")),
+    )
+    # the loosened marker must not turn ordinary words into one, and the
+    # per-keyword tolerance must not bleed into a blanket vowel rewrite —
+    # "ค่า" is a real syllable that appears in almost every invoice
+    all_ok &= check(
+        "'ใบเสร็จรับเงิน' alone is still not a tax-invoice marker",
+        re.search(extractor.TAXINV_MARKER, "ใบเสร็จรับเงิน") is None,
+    )
+    all_ok &= check(
+        "'มูลค่า' is left alone by normalisation",
+        extractor.normalize_thai_text("ราคา มูลค่าเพิ่ม ค่าบริการ") == "ราคา มูลค่าเพิ่ม ค่าบริการ",
     )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
