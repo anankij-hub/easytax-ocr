@@ -1103,6 +1103,79 @@ THB
 """
 
 
+# Raw OCR text from the live app for the อรุณเทสต์ sample invoice INV-0001.
+# Four fields were wrong, three of them from ONE cause: the taxpayer ID on
+# this document is twelve digits (990000010014), and requiring exactly
+# thirteen meant no ID was found at all — so a full tax invoice was
+# classified ใบย่อ and ม.86/6 wiped the subtotal and VAT it plainly shows.
+# Separately, the buyer is literally named "ลูกค้าตัวอย่าง", and the rule
+# that skips lines containing "ลูกค้า" (meant for labels) discarded it,
+# leaving the seller's logo line "ARUN TEST สาขา สำนักงานใหญ่" to win.
+REAL_ARUN_RAW_TEXT = """บริษัท อรุณเทสต์ โซลูชัน จำกัต
+ARUN TEST SOLUTIONS CO., LTD.
+เลขประจำตัวผู้เสียภาษีอากร 990000010014
+ARUN TEST สาขา สำนักงานใหญ่
+SOLUTIONS
+123 ถนนตัวอย่าง ตำบลตัวอย่าง จังหวัดตัวอย่าง 50000
+ใบกำกับภาษี
+TAX INVOICE
+เลขที่ใบกำกับภาษี
+(Invoice No.)
+: INV-0001
+วันที่ออกใบกำกับภาษี : 08/03/2026
+(Invoice Date)
+ลูกค้า / Customer
+ชื่อลูกค้า
+:
+ที่อยู่
+ลูกค้าตัวอย่าง
+: 123 ถนนตัวอย่าง ตำบลตัวอย่าง
+จังหวัดตัวอย่าง 50000
+ล่าดับ
+No.
+รายการ
+Description
+จำนวน
+Quantity
+หน่วย
+1
+สินค้าตัวอย่าง A
+5
+2
+สินค้าตัวอย่าง B
+Unit Price
+2,500.00
+จำนวนเงิน
+Amount (THB)
+SAMPLE-TEST ONLY AND FOR TAX
+3 ค่าบริการตัวอย่าง
+12,500.00
+ชิ้น
+3,750.00
+11,250.00
+1
+รายการ
+1,000.50
+1,000.50
+หมายเหตุ / Remarks
+เอกสารนี้เป็นข้อมูลสมมติสำหรับทดสอบระบบเท่านั้น
+มูลค่าสินค้า/บริการ (Subtotal)
+24,750.50
+ภาษีมูลค่าเพิ่ม 7% (VAT 7%)
+1,732.54
+This document is a sample for testing purposes only.
+จำนวนเงินรวมทั้งสิ้น (Total)
+26,483.04
+วันที่
+ผู้จัดทำ
+(Prepared by)
+SAMPLE - TEST ONLY - NOT VALID FOR TAX
+วันที่
+ผู้มีอำนาจลงนาม
+(Authorized Signature)
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -1633,6 +1706,63 @@ def main():
     all_ok &= check(
         "a short 'วันที่ ...' field line still supplies the date",
         extractor.extract_date("วันที่ 31/12/2568\n") == ("31/12/2568", "2025-12-31"),
+    )
+
+    # regression: the อรุณเทสต์ invoice (see REAL_ARUN_RAW_TEXT)
+    fields15 = extractor.extract_fields(REAL_ARUN_RAW_TEXT, ocr_confidence=90.0)
+    print("\n--- Real อรุณเทสต์ OCR text fields ---")
+    for k, v in fields15.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real arun: a 12-digit taxpayer ID is reported, not dropped",
+        fields15["seller_tax_id"] == "990000010014",
+    )
+    all_ok &= check(
+        "real arun: classified เต็มรูป (was downgraded to ย่อ)",
+        fields15["doc_type"] == "เต็มรูป",
+    )
+    all_ok &= check("real arun: subtotal survives", fields15["subtotal"] == 24750.50)
+    all_ok &= check("real arun: vat survives", fields15["vat"] == 1732.54)
+    all_ok &= check("real arun: total", fields15["total"] == 26483.04)
+    all_ok &= check(
+        "real arun: buyer is the customer, not the seller's logo line",
+        fields15["buyer_name"] == "ลูกค้าตัวอย่าง",
+    )
+    all_ok &= check(
+        "real arun: the short taxpayer ID is flagged for review",
+        fields15["needs_review"] and "13 หลัก" in (fields15["review_reason"] or ""),
+    )
+
+    # a name that merely contains "ลูกค้า" is still a name
+    all_ok &= check(
+        "'ชื่อลูกค้า' is a bare label",
+        extractor._is_bare_buyer_label("ชื่อลูกค้า"),
+    )
+    all_ok &= check(
+        "'ลูกค้า / Customer' is a bare label",
+        extractor._is_bare_buyer_label("ลูกค้า / Customer"),
+    )
+    all_ok &= check(
+        "'รหัสลูกค้า / CUSTOMER' is a bare label",
+        extractor._is_bare_buyer_label("รหัสลูกค้า / CUSTOMER"),
+    )
+    all_ok &= check(
+        "'ลูกค้าตัวอย่าง' is a NAME, not a label",
+        extractor._is_bare_buyer_label("ลูกค้าตัวอย่าง") is False,
+    )
+    all_ok &= check(
+        "'สำนักงานใหญ่' alone does not make a company name",
+        extractor.BUYER_ENTITY_HINT_RE.search("ARUN TEST สาขา สำนักงานใหญ่") is None,
+    )
+    all_ok &= check(
+        "'บริษัท รจนา จำกัด (สำนักงานใหญ่)' still reads as a company",
+        bool(extractor.BUYER_ENTITY_HINT_RE.search("บริษัท รจนา จำกัด (สำนักงานใหญ่)")),
+    )
+    all_ok &= check(
+        "a 13-digit ID is still preferred over a labelled short one",
+        extractor.extract_tax_id(
+            "เลขประจำตัวผู้เสียภาษี 990000010014\nเลขประจำตัวผู้เสียภาษี 0105569123456\n"
+        ) == "0105569123456",
     )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the

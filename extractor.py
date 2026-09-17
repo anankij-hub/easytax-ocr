@@ -439,6 +439,13 @@ def has_valid_tax_id_format(tax_id):
     return len(digits) == 13
 
 
+TAXID_LABEL_RE = re.compile(
+    r"(?:เลขประจำตัวผู้เสียภาษี(?:อากร)?|เลขผู้เสียภาษี|Tax\s*(?:ID|Identification))"
+    r"[^\d\n]{0,20}(\d[\d\s-]{8,18}\d)",
+    re.IGNORECASE,
+)
+
+
 def extract_tax_id(text):
     for m in TAXID_RE.finditer(text):
         candidate = re.sub(r"\D", "", m.group(1))
@@ -446,6 +453,17 @@ def extract_tax_id(text):
             return candidate
     for m in TAXID_PLAIN_RE.finditer(text):
         return m.group(0)
+    # No 13-digit number anywhere — fall back to whatever number the
+    # document prints against its taxpayer-ID label. A real invoice came
+    # through with twelve digits (OCR almost certainly dropped one from a
+    # run of zeros), and returning nothing cascaded badly: no taxpayer ID
+    # meant not a full tax invoice, which meant ม.86/6 wiped the subtotal
+    # and VAT the document plainly showed. Reporting what is printed lets
+    # build_review_reasons flag the length and the user fix one digit.
+    for m in TAXID_LABEL_RE.finditer(text):
+        candidate = re.sub(r"\D", "", m.group(1))
+        if 10 <= len(candidate) <= 16:
+            return candidate
     return None
 
 
@@ -693,7 +711,10 @@ DOC_FURNITURE_RE = re.compile(
 # header line sitting above it in the OCR stream.
 BUYER_ENTITY_HINT_RE = re.compile(
     r"บริษัท|ห้างหุ้นส่วน|หจก|บจก|ร้าน|คุณ|นาย|นาง|นางสาว|ด\.ช\.|ด\.ญ\.|คณะ|มหาวิทยาลัย|"
-    r"วิทยาลัย|โรงเรียน|โรงพยาบาล|สำนักงาน|องค์การ|องค์กร|กรม|กระทรวง|เทศบาล|สหกรณ์|"
+    # "สำนักงานใหญ่" is a BRANCH marker (head office), not a company name —
+    # a letterhead's logo line "ARUN TEST สาขา สำนักงานใหญ่" was picked as
+    # the buyer because of it.
+    r"วิทยาลัย|โรงเรียน|โรงพยาบาล|สำนักงาน(?!ใหญ่)|องค์การ|องค์กร|กรม|กระทรวง|เทศบาล|สหกรณ์|"
     r"มูลนิธิ|สมาคม|Co\.,?\s*Ltd|Ltd|P(?:ublic)?\s*Co|Company|Corp|Foundation|University|School",
     re.IGNORECASE,
 )
@@ -792,7 +813,26 @@ def _skip_as_buyer_candidate(line):
         return True
     if ADDRESS_LINE_RE.search(line):
         return True
-    return any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS)
+    return _is_bare_buyer_label(line)
+
+
+def _is_bare_buyer_label(line):
+    """True when the line is JUST a buyer label — "ชื่อลูกค้า", "ลูกค้า /
+    Customer", "รหัสลูกค้า / CUSTOMER" — rather than a name that happens to
+    contain the word. Confirmed live: a buyer really named "ลูกค้าตัวอย่าง"
+    was thrown away because it contains "ลูกค้า", and the seller's logo
+    line was taken instead.
+
+    Strip the keyword, the English half, and any punctuation; a label has
+    almost nothing left ("ชื่อ", "รหัส", ""), a name still has words."""
+    if not any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS):
+        return False
+    # Strip the plain label words, not BUYER_KEYWORDS — those carry
+    # lookbehinds meant for matching, so "ลูกค้า" inside "รหัสลูกค้า" would
+    # survive and make a label look like a name.
+    rest = re.sub(r"ลูกค้า|ผู้ซื้อ|ผู้ชื้อ|ชื่อ|นาม|รหัส|เลขที่", "", line)
+    rest = re.sub(r"[A-Za-z0-9\s:：/|()\-–.,]+", "", rest)
+    return len(rest) <= 6
 
 
 def _is_latin_script(line):
@@ -1056,7 +1096,10 @@ def classify_doc_type(fields):
     ถ้าขาดอย่างใดอย่างหนึ่ง ถือเป็นใบย่อ (หัก VAT ซื้อไม่ได้). ไม่ตรวจสอบ checksum
     ของเลขผู้เสียภาษีอีกต่อไป — แค่สกัดเลขออกมาได้ครบ 13 หลักก็พอ."""
     has_marker = fields.get("_has_tax_invoice_marker")
-    has_tax_id = has_valid_tax_id_format(fields.get("seller_tax_id"))
+    # Presence, not exact length. A taxpayer ID that came out a digit short
+    # is an OCR defect to flag (see build_review_reasons), not grounds for
+    # reclassifying a full tax invoice as ใบย่อ and discarding its VAT.
+    has_tax_id = bool(fields.get("seller_tax_id"))
     has_invoice_no = bool(fields.get("invoice_no"))
     has_buyer = bool(fields.get("buyer_name"))
     if has_marker and has_tax_id and has_invoice_no and has_buyer:
@@ -1072,6 +1115,11 @@ def build_review_reasons(fields):
         reasons.append("ไม่พบวันที่")
     if not fields.get("seller_tax_id"):
         reasons.append("ไม่พบเลขประจำตัวผู้เสียภาษีผู้ขาย")
+    elif not has_valid_tax_id_format(fields["seller_tax_id"]):
+        digits = re.sub(r"\D", "", fields["seller_tax_id"])
+        reasons.append(
+            f"เลขประจำตัวผู้เสียภาษีผู้ขายมี {len(digits)} หลัก (ต้องเป็น 13 หลัก) — โปรดตรวจสอบ"
+        )
     if fields.get("total") is None:
         reasons.append("ไม่พบยอดรวม")
     # A document that looks like a full ใบกำกับภาษี in every other respect
