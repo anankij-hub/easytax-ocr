@@ -1176,6 +1176,64 @@ SAMPLE - TEST ONLY - NOT VALID FOR TAX
 """
 
 
+# Raw OCR text from the live app for the บลูไพน์ ดิจิทัล sample invoice
+# INV-0002. This one labels its buyer "ข้อมูลผู้ซื้อ / BUYER" — a wording
+# the keyword list didn't know (it had นามผู้ซื้อ / ชื่อผู้ซื้อ / ลูกค้า /
+# Customer / Bill To). With no buyer found, the same cascade as always: not
+# a full tax invoice, so ม.86/6 wiped the subtotal and VAT it prints.
+REAL_BLUEPINE_RAW_TEXT = """BP
+บริษัท บลูไพน์ ดิจิทัล จำกัด
+ใบกำกับภาษี / TAX INVOICE
+Test ID: TEST-002
+SAMPLE – TEST ONLY – NOT VALID FOR TAX
+ข้อมูลผู้ขาย / SELLER
+บริษัท บลูไพน์ ดิจิทัล จำกัด
+เลขประจำตัวผู้เสียภาษี / Tax ID: 990000010023
+สาขา / Branch: สำนักงานใหญ่
+เลขที่ใบกำกับภาษี / Invoice No.
+INV-0002
+วันที่ / Invoice Date
+14/05/2026
+ข้อมูลผู้ซื้อ / BUYER
+บริษัท ตัวอย่าง เทคโนโลยี จำกัด
+123 ถนนตัวอย่าง ตำบลตัวอย่าง อำเภอตัวอย่าง จังหวัดตัวอย่าง 50000
+ลำดับ
+ No.
+รายการ
+Description
+จำนวน
+ Qty
+ราคาต่อหน่วย
+ Unit Price
+จำนวนเงิน
+ Amount
+1
+จอภาพคอมพิวเตอร์ 24 นิ้ว
+2
+4,500.00
+9,000.00
+2
+คีย์บอร์ดไร้สาย
+3
+850.00
+2,550.00
+3
+อุปกรณ์ขยายพอร์ต USB-C
+1
+1,440.25
+1,440.25
+ยอดก่อนภาษี / Subtotal
+12,990.25
+ภาษีมูลค่าเพิ่ม 7% / VAT 7%
+909.32
+ยอดรวม / Total
+13,899.57
+Template: T01
+TEST-002
+SAMPLE – TEST ONLY – NOT VALID FOR TAX
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -1763,6 +1821,41 @@ def main():
         extractor.extract_tax_id(
             "เลขประจำตัวผู้เสียภาษี 990000010014\nเลขประจำตัวผู้เสียภาษี 0105569123456\n"
         ) == "0105569123456",
+    )
+
+    # regression: the บลูไพน์ invoice (see REAL_BLUEPINE_RAW_TEXT)
+    fields16 = extractor.extract_fields(REAL_BLUEPINE_RAW_TEXT, ocr_confidence=90.0)
+    print("\n--- Real บลูไพน์ OCR text fields ---")
+    for k, v in fields16.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real bluepine: 'ข้อมูลผู้ซื้อ / BUYER' finds the buyer",
+        fields16["buyer_name"] == "บริษัท ตัวอย่าง เทคโนโลยี จำกัด",
+    )
+    all_ok &= check("real bluepine: classified เต็มรูป", fields16["doc_type"] == "เต็มรูป")
+    all_ok &= check("real bluepine: subtotal survives", fields16["subtotal"] == 12990.25)
+    all_ok &= check("real bluepine: vat survives", fields16["vat"] == 909.32)
+    all_ok &= check("real bluepine: total", fields16["total"] == 13899.57)
+    all_ok &= check("real bluepine: invoice_no", fields16["invoice_no"] == "INV-0002")
+    all_ok &= check("real bluepine: date = 2026-05-14", fields16["invoice_date_iso"] == "2026-05-14")
+
+    # buyer labels this now understands, and the prose it must still ignore
+    all_ok &= check(
+        "'ข้อมูลผู้ซื้อ / BUYER' is recognised as a bare label",
+        extractor._is_bare_buyer_label("ข้อมูลผู้ซื้อ / BUYER"),
+    )
+    all_ok &= check(
+        "the word ผู้ซื้อ inside the printed conditions is not a buyer label",
+        extractor.extract_buyer_name(
+            "ใบกำกับภาษี\n"
+            "- สินค้าตามใบกำกับภาษีนี้ แม้จะส่งมอบแก่ผู้ซื้อแล้วก็ยังคงเป็นทรัพย์สินของผู้ขาย"
+            "จนกว่าผู้ซื้อได้ชำระเงินเรียบร้อยแล้ว\n"
+            "บริษัท ไม่เกี่ยวข้อง จำกัด\n"
+        ) is None,
+    )
+    all_ok &= check(
+        "'ข้อมูลผู้ขาย / SELLER' is not a buyer label",
+        extractor._is_bare_buyer_label("ข้อมูลผู้ขาย / SELLER") is False,
     )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the

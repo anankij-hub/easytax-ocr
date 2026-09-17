@@ -134,7 +134,12 @@ TOTAL_KEYWORDS = [
 # "เลขที่ลูกค้า") — those hold a short numeric/alphanumeric code, which the
 # forward search would otherwise happily return as the buyer's name.
 BUYER_KEYWORDS = [
-    r"นามผู้ซื้อ", r"ชื่อผู้ซื้อ", r"(?<!รหัส)(?<!เลขที่)ลูกค้า", r"Customer", r"Bill\s*To",
+    r"นามผู้ซื้อ", r"ชื่อผู้ซื้อ", r"ข้อมูลผู้ซื้อ", r"รายละเอียดผู้ซื้อ",
+    r"(?<!รหัส)(?<!เลขที่)ลูกค้า", r"Customer", r"Bill\s*To", r"Buyer",
+    # Bare "ผู้ซื้อ" last: it also occurs in the terms printed at the foot
+    # of an invoice ("...แม้จะส่งมอบแก่ผู้ซื้อแล้ว..."), which the
+    # prose-length guard in extract_buyer_name keeps out.
+    r"(?<!รหัส)ผู้ซื้อ",
 ]
 # NOTE: "Buyer Name" is intentionally NOT in this forward-search list — on
 # a real invoice it was OCR'd sitting AFTER the buyer name value instead of
@@ -816,6 +821,12 @@ def _skip_as_buyer_candidate(line):
     return _is_bare_buyer_label(line)
 
 
+# Longest line that can still be a buyer-label line rather than prose.
+# Generous — a bilingual label with its value on the same line
+# ("ชื่อลูกค้า/Customer Name : บริษัท เอ จำกัด") is well under it.
+_BUYER_LABEL_MAX_LINE_LEN = 100
+
+
 def _is_bare_buyer_label(line):
     """True when the line is JUST a buyer label — "ชื่อลูกค้า", "ลูกค้า /
     Customer", "รหัสลูกค้า / CUSTOMER" — rather than a name that happens to
@@ -830,7 +841,7 @@ def _is_bare_buyer_label(line):
     # Strip the plain label words, not BUYER_KEYWORDS — those carry
     # lookbehinds meant for matching, so "ลูกค้า" inside "รหัสลูกค้า" would
     # survive and make a label look like a name.
-    rest = re.sub(r"ลูกค้า|ผู้ซื้อ|ผู้ชื้อ|ชื่อ|นาม|รหัส|เลขที่", "", line)
+    rest = re.sub(r"ลูกค้า|ผู้ซื้อ|ผู้ชื้อ|ข้อมูล|รายละเอียด|ชื่อ|นาม|รหัส|เลขที่", "", line)
     rest = re.sub(r"[A-Za-z0-9\s:：/|()\-–.,]+", "", rest)
     return len(rest) <= 6
 
@@ -930,6 +941,12 @@ def extract_buyer_name(text, seller_name=None):
     for kw in BUYER_KEYWORDS:
         for i, line in enumerate(lines):
             if TABLE_HEADER_LINE_RE.search(line):
+                continue
+            # A field label is a short line. The words "ผู้ซื้อ" and "ลูกค้า"
+            # also appear in the conditions printed at the foot of an
+            # invoice ("...ยังคงเป็นทรัพย์สินของผู้ขายจนกว่าผู้ซื้อได้ชำระ
+            # เงิน..."), and a name must never be read out of that.
+            if len(line.strip()) > _BUYER_LABEL_MAX_LINE_LEN:
                 continue
             m = re.search(kw, line, re.IGNORECASE)
             if not m:
