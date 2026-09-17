@@ -728,6 +728,105 @@ AUTHORIZED SIGNATURE
 """
 
 
+# Raw OCR text from the live app for the ร่ำรวย888 invoice RE00001 —
+# ground truth. Five fields were wrong, from four separate causes:
+#   - Every amount carries its currency ("183,800.00 บาท"), so no line in
+#     the totals column registered as a number and the box paired nothing.
+#   - The box ends with "จำนวนเงินรวมทั้งสิ้น" AND a summary row
+#     "จำนวนรวมทั้งสิ้น" — two Thai labels classifying alike, which the
+#     bilingual-label collapse merged into one, shifting every figure.
+#   - There is no invoice-number label at all: the number is printed under
+#     the title. The bare "เลขที่" keyword instead matched "เลขที่บัญชี" and
+#     filed the seller's BANK ACCOUNT as the invoice number.
+#   - "วันที่" in the signature block ("ผู้สั่งซื้อสินค้า / วันที่ 21/01/2558")
+#     was read as the document's date.
+REAL_ROMRUAY_RAW_TEXT = """8
+บริษัท ร่ำรวย888 จำกัด
+289 อาคารร่ำรวย888 ทาวเวอร์ ชั้น 18 ถนนเพชรบุรีตัดใหม่
+แขวงบางกะปิ เขตห้วยขวาง กรุงเทพมหานคร 10310
+เลขประจำตัวผู้เสียภาษีอากร 0105568345671
+โทร. 02-777-8899 อีเมล sales prommay888.example
+เว็บไซต์ www.romruay888.example
+ชื่อลูกค้า
+ชื่อนิติบุคคล
+ที่อยู่
+เลขประจำตัวผู้เสียภาษี
+เบอร์โทรศัพท์
+อีเมล
+กิตติพงษ์ วิริยะกุล
+บริษัท A จำกัด
+99/15 ถนนวิภาวดีรังสิต แขวงจอมพล
+เขตจตุจักร กรุงเทพมหานคร 10900
+0105569123456
+089-123-4567
+purchasing@companya.example
+ชื่อผู้ชาย
+เบอร์ติดต่อ
+ชื่อโปรเจกต์
+ไม้และวัสดุก่อสร้างสำหรับโครงการรีสอร์ทริมทะเล
+เลขที่อ้างอิง
+วันที่ออกใบนัดจ่า
+วันที่ครบก้าหนด
+ล่าดับ รายการสินค้า
+ไม้สัก
+1
+2
+เกรด A
+ไม้สะเดา
+เกรด A
+ช่องทางการชาระเงิน
+หมายเหตุ -
+ธนาคาร
+เลขที่บัญชี
+ชื่อบัญชี
+หรือสแกนเพื่อชำระเงิน (ตัวอย่าง)
+กสิกรไทย
+456-7-89012-3
+บริษัท ร่ำรวย888 จำกัด
+หน้า 1/1
+ต้นฉบับ (เอกสารออกเป็นชุด)
+ใบกำกับภาษี/ใบเสร็จ
+RE00001
+มั่งมี ทรัพย์เจริญ
+081-888-8888
+REF-2568-01
+31/01/2568
+07/02/2568
+จำนวน
+หน่วย
+ราคา/หน่วย
+ส่วนลด
+ยอดรวม
+80
+ลูกบาศก์ฟุต
+2,200,00
+0.00
+176,000.00
+60
+ลูกบาศก์ฟุต
+130.00
+0.00
+7,800.00
+ยอดรวม
+ส่วนลดเพิ่มเติม
+ยอดรวมหลังหักส่วนลด
+ภาษีมูลค่าเพิ่ม (7%)
+จำนวนเงินรวมทั้งสิ้น
+จำนวนรวมทั้งสิ้น
+183,800.00 บาท
+3,800.00 บาท
+180,000.00 บาท
+12,600.00 บาท
+192,600.00 บาท
+192,600.00
+kin
+ผู้สั่งซื้อสินค้า
+วันที่ 21/01/2558
+ผู้อนุมัติ
+วันที่ 30/01/2558
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -983,6 +1082,57 @@ def main():
     all_ok &= check(
         "'รวมมูลค่าสุทธิ' is the total",
         extractor._classify_totals_label("รวมมูลค่าสุทธิ") == "total",
+    )
+
+    # regression: the ร่ำรวย888 invoice (see REAL_ROMRUAY_RAW_TEXT)
+    fields11 = extractor.extract_fields(REAL_ROMRUAY_RAW_TEXT, ocr_confidence=90.0)
+    print("\n--- Real ร่ำรวย888 OCR text fields ---")
+    for k, v in fields11.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real romruay: invoice_no = RE00001 (not the bank account 456-7-89012-3)",
+        fields11["invoice_no"] == "RE00001",
+    )
+    all_ok &= check(
+        "real romruay: date = 2025-01-31 (not the 21/01/2558 signature date)",
+        fields11["invoice_date_iso"] == "2025-01-31",
+    )
+    all_ok &= check("real romruay: subtotal = 180000.0", fields11["subtotal"] == 180000.00)
+    all_ok &= check("real romruay: vat = 12600.0", fields11["vat"] == 12600.00)
+    all_ok &= check("real romruay: total = 192600.0", fields11["total"] == 192600.00)
+    all_ok &= check("real romruay: buyer_name", fields11["buyer_name"] == "บริษัท A จำกัด")
+    all_ok &= check("real romruay: seller tax id", fields11["seller_tax_id"] == "0105568345671")
+    all_ok &= check("real romruay: classified เต็มรูป", fields11["doc_type"] == "เต็มรูป")
+    all_ok &= check("real romruay: not flagged for review", fields11["needs_review"] is False)
+
+    # amounts printed with their currency
+    all_ok &= check("'183,800.00 บาท' parses", extractor._clean_number("183,800.00 บาท") == 183800.0)
+    all_ok &= check("'1,500 THB' parses", extractor._clean_number("1,500 THB") == 1500.0)
+    all_ok &= check(
+        "'183,800.00 บาท' counts as a number line",
+        bool(extractor.PURE_NUMBER_LINE_RE.match("183,800.00 บาท")),
+    )
+
+    # only a Thai/English label pair is one field; two Thai labels are two
+    all_ok &= check(
+        "'ภาษีมูลค่าเพิ่ม 7%' + 'VAT 7%' are one field",
+        extractor._is_translation_pair("ภาษีมูลค่าเพิ่ม 7%", "VAT 7%"),
+    )
+    all_ok &= check(
+        "'จำนวนเงินรวมทั้งสิ้น' + 'จำนวนรวมทั้งสิ้น' are two fields",
+        extractor._is_translation_pair("จำนวนเงินรวมทั้งสิ้น", "จำนวนรวมทั้งสิ้น") is False,
+    )
+
+    # labels that name some OTHER number must not supply the invoice number
+    for label, line in [("bank account", "เลขที่บัญชี"), ("reference", "เลขที่อ้างอิง"),
+                        ("purchase order", "เลขที่ใบสั่งซื้อ")]:
+        all_ok &= check(
+            f"'{line}' is not treated as the invoice-number label ({label})",
+            extractor.extract_invoice_no(f"{line}\n456-7-89012-3\n") is None,
+        )
+    all_ok &= check(
+        "a plain 'เลขที่' label still supplies the invoice number",
+        extractor.extract_invoice_no("เลขที่\nIV20250123-089\n") == "IV20250123-089",
     )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the

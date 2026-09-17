@@ -52,8 +52,15 @@ THAI_MONTHS = {
 # "เลขที่?" — the MAI EK is optional for the same reason as in
 # TOTAL_KEYWORDS: OCR drops it. A real invoice's number label came through
 # as "เลขที / NO".
+# The lookahead on the bare "เลขที่?" excludes the OTHER numbers a Thai
+# invoice labels the same way — a bank account ("เลขที่บัญชี"), a reference
+# ("เลขที่อ้างอิง"), a purchase order ("เลขที่ใบสั่งซื้อ"). Confirmed live: an
+# invoice recorded the seller's bank account number as its invoice number.
+# The tone mark is inside the lookahead too, so the optional-ก่อน-mark form
+# can't sidestep it by matching one character less.
 INVOICE_NO_KEYWORDS = [
-    r"เลขที่ใบกำกับภาษี", r"เลขที่เอกสาร", r"เลขที่ใบเสร็จ", r"เลขที่?",
+    r"เลขที่ใบกำกับภาษี", r"เลขที่เอกสาร", r"เลขที่ใบเสร็จ",
+    r"เลขที่?(?![่]?(?:บัญชี|อ้างอิง|ใบสั่งซื้อ|ผู้เสีย|ประจำตัว))",
     r"Invoice\s*No\.?", r"Tax\s*Invoice\s*No\.?", r"Document\s*No\.?", r"No\.",
 ]
 DATE_KEYWORDS = [r"วันที่", r"Date"]
@@ -150,6 +157,11 @@ TAXID_PLAIN_RE = re.compile(r"\b\d{13}\b")
 # printed this way, which made the extractor report no amounts at all.
 TRAILING_DASH_SATANG_RE = re.compile(r"\s*[.,]-\s*$")
 
+# A totals column often prints its currency on every line ("183,800.00
+# บาท"). Confirmed live: none of those lines registered as numbers, so the
+# totals box paired nothing and the amounts were scavenged from elsewhere.
+CURRENCY_SUFFIX_RE = re.compile(r"\s*(?:บาท|บ\.|Baht|THB|฿)\s*$", re.IGNORECASE)
+
 # OCR also reads the decimal point as a comma: a real invoice came through
 # with "15,750,00" and "1,102,50" for 15,750.00 and 1,102.50. Stripping the
 # commas as thousands separators turned those into 1,575,000 and 110,250 —
@@ -162,7 +174,8 @@ COMMA_DECIMAL_RE = re.compile(r"^([-+]?\d{1,3}(?:,\d{3})*),(\d{2})$")
 def _clean_number(s):
     if s is None:
         return None
-    s = TRAILING_DASH_SATANG_RE.sub("", s.translate(THAI_DIGITS).strip())
+    s = CURRENCY_SUFFIX_RE.sub("", s.translate(THAI_DIGITS).strip())
+    s = TRAILING_DASH_SATANG_RE.sub("", s)
     m = COMMA_DECIMAL_RE.match(s)
     if m:
         s = f"{m.group(1)}.{m.group(2)}"
@@ -373,11 +386,33 @@ def extract_tax_id(text):
     return None
 
 
+def _invoice_no_under_title(text):
+    """Last resort: the number printed directly under the document title,
+    with no label at all. Confirmed live on an invoice whose header is just
+
+        ใบกำกับภาษี/ใบเสร็จ
+        RE00001
+
+    Only a bare token containing a digit counts, so the English half of a
+    bilingual title ("TAXINVOICE/RECEIPT") can't be taken for a number."""
+    lines = [l.strip() for l in text.splitlines()]
+    for i, line in enumerate(lines):
+        if not re.search(TAXINV_MARKER, line) and not re.search(RECEIPT_MARKER, line):
+            continue
+        for j in (i + 1, i + 2):
+            if j >= len(lines) or not lines[j]:
+                continue
+            cand = lines[j]
+            if DOC_VALUE_LINE_RE.match(cand) and re.search(r"\d", cand) and len(cand) >= 4:
+                return cand
+    return None
+
+
 def extract_invoice_no(text):
     val = _find_after_keyword(
         text, INVOICE_NO_KEYWORDS, value_pattern=r"[A-Za-z0-9\-/]{3,}", require_digit=True
     )
-    return val
+    return val or _invoice_no_under_title(text)
 
 
 def _parse_thai_date(raw):
@@ -410,9 +445,30 @@ def _parse_thai_date(raw):
     return None
 
 
+# The signature block at the foot of an invoice has its own "วันที่ ____"
+# next to each signer, and those dates are not the document's date.
+# Confirmed live: an invoice was filed under 21/01/2558, the date the buyer
+# signed for the goods, instead of its own 31/01/2568.
+SIGNATURE_CONTEXT_RE = re.compile(
+    r"ผู้สั่งซื้อ|ผู้อนุมัติ|ผู้รับ|ผู้ส่ง|ผู้จ่าย|ผู้ตรวจ|ผู้มีอำนาจ|ลงนาม|ลายเซ็น|ลายมือชื่อ|"
+    r"Authori[sz]ed|Signature|Approved|Received|Delivered"
+)
+
+
+def _in_signature_block(text, pos, lookback=2):
+    """True when the keyword at `pos` sits in the signature block — judged
+    by the line it's on and the couple of lines above it."""
+    head = text[:pos].splitlines()
+    tail = text[pos:].splitlines()
+    around = head[-(lookback + 1):] + tail[:1]
+    return any(SIGNATURE_CONTEXT_RE.search(l) for l in around)
+
+
 def extract_date(text):
     for kw in DATE_KEYWORDS:
         for m in re.finditer(kw, text):
+            if _in_signature_block(text, m.start()):
+                continue
             # Window needs to be wide enough to skip past an intervening
             # bilingual English sub-label (e.g. "วันที่เอกสาร\nDocument
             # Date\n02/08/2025") without truncating the date itself.
@@ -426,7 +482,14 @@ def extract_date(text):
                 if dm2:
                     iso = _parse_thai_date(dm2.group(0))
                     return dm2.group(0), iso
-    # fallback: any date-looking token in the whole document
+    # Fallback: any date-looking token in the whole document — but only one
+    # that actually resolves to a real calendar date. A phone number or a
+    # bank account can match the shape ("456-7-89012-3" yields "56-7-8901")
+    # and used to be returned as the date, unparsed, purely for being first.
+    for dm in re.finditer(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}", text):
+        iso = _parse_thai_date(dm.group(0))
+        if iso:
+            return dm.group(0), iso
     dm = re.search(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}", text)
     if dm:
         return dm.group(0), _parse_thai_date(dm.group(0))
@@ -881,7 +944,25 @@ _TOTALS_BLOCK_MAX_GAP = 12
 # Trailing "[.,]-" is the Thai whole-baht shorthand, not a minus sign — see
 # TRAILING_DASH_SATANG_RE. A totals column printed as "1,300.- / 91.- /
 # 1,391.-" has to register as a run of numbers like any other.
-PURE_NUMBER_LINE_RE = re.compile(r"^[-+]?\d[\d,]*(?:\.\d+)?\s*(?:[.,]-)?\s*%?$")
+PURE_NUMBER_LINE_RE = re.compile(
+    r"^[-+]?\d[\d,]*(?:\.\d+)?\s*(?:[.,]-)?\s*%?\s*(?:บาท|บ\.|Baht|THB|฿)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_translation_pair(a, b):
+    """True when two label lines look like the Thai and English halves of
+    ONE field ("ภาษีมูลค่าเพิ่ม 7%" / "VAT 7%") rather than two separate
+    fields — exactly one of them is written in Latin script.
+
+    This decides whether consecutive labels that classify the same way get
+    collapsed into one. Collapsing unconditionally was wrong: a real
+    invoice ends with "จำนวนเงินรวมทั้งสิ้น" and then a summary row
+    "จำนวนรวมทั้งสิ้น", two Thai lines with two separate figures, and
+    merging them shifted every amount in the box onto the wrong field."""
+    a_latin = bool(re.search(r"[A-Za-z]", a))
+    b_latin = bool(re.search(r"[A-Za-z]", b))
+    return a_latin != b_latin
 
 
 def _classify_totals_label(line):
@@ -921,14 +1002,18 @@ def _extract_totals_block(text):
     n = len(lines)
     for start in range(n):
         labels = []
+        last_label = ""
         j = start
         unclassified_streak = 0
         while (j < n and lines[j] and not PURE_NUMBER_LINE_RE.match(lines[j])
                and not TABLE_HEADER_LINE_RE.search(lines[j])):
             key = _classify_totals_label(lines[j])
             if key is not None:
-                if not labels or labels[-1] != key:
+                if labels and labels[-1] == key and _is_translation_pair(last_label, lines[j]):
+                    pass  # the English half of the label above — one field
+                else:
                     labels.append(key)
+                last_label = lines[j]
                 unclassified_streak = 0
             else:
                 unclassified_streak += 1
