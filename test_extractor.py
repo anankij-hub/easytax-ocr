@@ -1858,6 +1858,42 @@ def main():
         extractor._is_bare_buyer_label("ข้อมูลผู้ขาย / SELLER") is False,
     )
 
+    # regression: the ไพรม์เวิร์ค invoice INV-0009, whose buyer came out as
+    # "ชื่อลูกค้า : ลูกค้าตัวอย่าง" — the label glued to the value. The box
+    # heading "ลูกค้า / Customer" sits on its own line above, so THAT is
+    # what the keyword matched; the value was then read off the next line
+    # with its own label still attached, and nothing stripped a leading
+    # THAI label (only Latin ones were handled).
+    primework = extractor.extract_fields(
+        "P\nบริษัท ไพรม์เวิร์ค เทคโนโลยี จำกัด\nPRIMEWORK TECHNOLOGY CO., LTD.\n"
+        "เลขประจำตัวผู้เสียภาษีอากร 990000010097\nPRIMEWORK สาขา 00001\n"
+        "ใบกำกับภาษี\nTAX INVOICE\nเลขที่ใบกำกับภาษี\n(Invoice No.)\n: INV-0009\n"
+        "วันที่ออกใบกำกับภาษี : 11/09/2026\n(Invoice Date)\n"
+        "ลูกค้า / Customer\nชื่อลูกค้า : ลูกค้าตัวอย่าง\n"
+        "ที่อยู่ : 123 ถนนตัวอย่าง ตำบลตัวอย่าง\nจังหวัดตัวอย่าง 50000\n"
+        "มูลค่าสินค้า/บริการ (Subtotal)\n36,500.00\n"
+        "ภาษีมูลค่าเพิ่ม 7% (VAT 7%)\n2,555.00\n"
+        "จำนวนเงินรวมทั้งสิ้น (Total)\n39,055.00\n",
+        ocr_confidence=90.0,
+    )
+    all_ok &= check(
+        "primework: buyer is the name alone, without its label",
+        primework["buyer_name"] == "ลูกค้าตัวอย่าง",
+    )
+    all_ok &= check("primework: subtotal", primework["subtotal"] == 36500.00)
+    all_ok &= check("primework: vat", primework["vat"] == 2555.00)
+    all_ok &= check("primework: total", primework["total"] == 39055.00)
+
+    # stripping a leading Thai label needs its separator, so a name that
+    # merely begins with one of those words survives intact
+    for raw, want in [("ชื่อลูกค้า : ลูกค้าตัวอย่าง", "ลูกค้าตัวอย่าง"),
+                      ("ชื่อลูกค้า/Customer Name : บริษัท เอ จำกัด", "บริษัท เอ จำกัด"),
+                      ("นามผู้ซื้อ : บริษัท A จำกัด", "บริษัท A จำกัด"),
+                      ("ลูกค้าตัวอย่าง", "ลูกค้าตัวอย่าง"),
+                      ("บริษัท ลูกค้าดี จำกัด", "บริษัท ลูกค้าดี จำกัด")]:
+        all_ok &= check(f"clean buyer value {raw!r} -> {want!r}",
+                        extractor._clean_buyer_value(raw) == want)
+
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
     # รจนา invoice — the ชื่อผู้ซื้อ box came out as "1", i.e. a cell from the
     # items table instead of the ชื่อลูกค้า value. Each case below is a way a

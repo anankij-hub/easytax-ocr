@@ -767,6 +767,16 @@ def _clean_buyer_value(val):
     # Stripping the slash reduces it to "Name", which the label blocklist
     # then recognises — without it, "/ Name" was recorded as a buyer.
     val = re.sub(r"^[:：\-–/|｜]+\s*", "", val).strip()
+    # A candidate line often carries its own Thai label ("ชื่อลูกค้า :
+    # ลูกค้าตัวอย่าง"): the keyword that located it matched the box heading
+    # on the line ABOVE, so nothing had consumed this line's label. Drop a
+    # leading buyer label up to its separator — the separator is required,
+    # so a name that merely starts with one of these words ("ลูกค้าตัวอย่าง")
+    # is left intact.
+    val = re.sub(
+        r"^(?:ชื่อ|นาม|ข้อมูล|รายละเอียด)?(?:ลูกค้า|ผู้ซื้อ|ผู้ชื้อ)\s*[:：/|｜\-–]\s*",
+        "", val,
+    ).strip()
     # A bilingual label pair prints both halves before the value
     # ("ชื่อลูกค้า/Customer Name : บริษัท เอ จำกัด"). The keyword match only
     # consumes the Thai half, leaving "/Customer Name : " glued to the front
