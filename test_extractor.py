@@ -1169,6 +1169,34 @@ def main():
         print(f"  {label}: {amounts} -> {got[:3]}")
         all_ok &= check(f"totals — {label}", got[:3] == expected)
 
+    # regression: the three figures read correctly but paired with the
+    # wrong labels. Reported from the live app twice — an invoice showed
+    # VAT 511.00 and total 33.43 for 477.57 + 33.43 = 511.00. Every
+    # rearrangement of a valid set must resolve to the one arrangement that
+    # satisfies both relations.
+    print("\n--- Swapped totals ---")
+    for triple in [(477.57, 511.00, 33.43), (33.43, 477.57, 511.00),
+                   (511.00, 33.43, 477.57), (33.43, 511.00, 477.57),
+                   (511.00, 477.57, 33.43), (477.57, 33.43, 511.00)]:
+        got = extractor.reconcile_totals(*triple)
+        print(f"  {triple} -> {got}")
+        all_ok &= check(f"swapped totals {triple} -> (477.57, 33.43, 511.0)",
+                        got == (477.57, 33.43, 511.00))
+    all_ok &= check(
+        "figures that are simply wrong are NOT rearranged into a fake fit",
+        extractor.reconcile_totals(100.0, 55.0, 900.0) == (100.0, 55.0, 900.0),
+    )
+
+    # yyyy/mm/dd dates, which used to be matched from their third character
+    all_ok &= check("'2025/02/18' -> 2025-02-18", extractor._parse_thai_date("2025/02/18") == "2025-02-18")
+    all_ok &= check("'2568/02/18' (พ.ศ.) -> 2025-02-18", extractor._parse_thai_date("2568/02/18") == "2025-02-18")
+    all_ok &= check("'18/02/2025' still -> 2025-02-18", extractor._parse_thai_date("18/02/2025") == "2025-02-18")
+    all_ok &= check("'14/07/68' still -> 2025-07-14", extractor._parse_thai_date("14/07/68") == "2025-07-14")
+    all_ok &= check(
+        "a yyyy/mm/dd date is captured whole, not from its third digit",
+        extractor.extract_date("วันที่ 2025/02/18\n") == ("2025/02/18", "2025-02-18"),
+    )
+
     # an invoice whose amounts can't be reconciled must be flagged, not
     # silently recorded with figures that don't add up
     broken = extractor.extract_fields(

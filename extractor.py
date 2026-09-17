@@ -12,6 +12,7 @@ documents that fail to parse.
 """
 import re
 import datetime
+import itertools
 
 THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
 
@@ -64,6 +65,12 @@ INVOICE_NO_KEYWORDS = [
     r"Invoice\s*No\.?", r"Tax\s*Invoice\s*No\.?", r"Document\s*No\.?", r"No\.",
 ]
 DATE_KEYWORDS = [r"วันที่", r"Date"]
+
+# Matches dd/mm/yyyy AND yyyy/mm/dd. The leading group allows four digits
+# so a year-first date is captured whole: against the old \d{1,2} opener,
+# "2025/02/18" matched starting from its third character, giving "25/02/18"
+# — filed as 25 February 2018.
+DATE_TOKEN_RE = re.compile(r"\d{1,4}[/.\-]\d{1,2}[/.\-]\d{1,4}")
 # The lookbehinds keep "ภาษีมูลค่าเพิ่ม" from matching the two goods-total
 # lines that merely mention VAT — "สินค้าที่เสียภาษีมูลค่าเพิ่ม" (the pre-tax
 # subtotal) and "สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม" (exempt goods). Reading
@@ -420,6 +427,18 @@ def _parse_thai_date(raw):
     Handles dd/mm/yyyy (พ.ศ. or ค.ศ.) and 'dd เดือน ปี' formats."""
     raw = raw.translate(THAI_DIGITS).strip()
 
+    # Year first (2025/02/18, or 2568/02/18 in พ.ศ.) — checked before the
+    # day-first form, which a four-digit year can't be mistaken for.
+    m = re.match(r"(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})\s*$", raw)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if y > 2400:
+            y -= 543
+        try:
+            return datetime.date(y, mo, d).isoformat()
+        except ValueError:
+            return None
+
     m = re.match(r"(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})", raw)
     if m:
         d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -473,7 +492,7 @@ def extract_date(text):
             # bilingual English sub-label (e.g. "วันที่เอกสาร\nDocument
             # Date\n02/08/2025") without truncating the date itself.
             window_text = text[m.end():m.end() + 60]
-            dm = re.search(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}", window_text)
+            dm = DATE_TOKEN_RE.search(window_text)
             if dm:
                 iso = _parse_thai_date(dm.group(0))
                 return dm.group(0), iso
@@ -486,11 +505,11 @@ def extract_date(text):
     # that actually resolves to a real calendar date. A phone number or a
     # bank account can match the shape ("456-7-89012-3" yields "56-7-8901")
     # and used to be returned as the date, unparsed, purely for being first.
-    for dm in re.finditer(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}", text):
+    for dm in DATE_TOKEN_RE.finditer(text):
         iso = _parse_thai_date(dm.group(0))
         if iso:
             return dm.group(0), iso
-    dm = re.search(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}", text)
+    dm = DATE_TOKEN_RE.search(text)
     if dm:
         return dm.group(0), _parse_thai_date(dm.group(0))
     return None, None
@@ -847,6 +866,24 @@ def reconcile_totals(subtotal, vat, total):
     into the warning the user sees."""
     if _amounts_balance(subtotal, vat, total) and _vat_rate_ok(subtotal, vat):
         return subtotal, vat, total
+
+    # Before computing anything, consider that all three figures were read
+    # correctly but landed on the wrong fields — a column of labels paired
+    # with its column of values one position out puts the total in the VAT
+    # box, which is what the app showed on a real invoice (VAT 511.00,
+    # total 33.43, for 477.57 + 33.43 = 511.00).
+    #
+    # Only one arrangement of three amounts can satisfy both relations at
+    # once: v = 0.07s forces v < s, and s + v = t forces t largest, so the
+    # smallest figure is the VAT, the largest the total. That makes the
+    # reordering safe — a wrong permutation cannot pass both checks — and
+    # it is tried before deriving anything, since rearranging what the
+    # document actually prints beats replacing it with arithmetic.
+    printed = (subtotal, vat, total)
+    if all(x is not None for x in printed):
+        for s, v, t in itertools.permutations(printed):
+            if _amounts_balance(s, v, t) and _vat_rate_ok(s, v):
+                return s, v, t
 
     # Each candidate trusts two of the three figures and derives the third.
     candidates = []
