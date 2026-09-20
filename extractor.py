@@ -1125,6 +1125,44 @@ def _nearest_entity_name(lines, label_idx, seller_name, max_distance=25, skip_id
     return best[1] if best else None
 
 
+# Where a company name is printed for a reason other than being a party
+# to the sale: the seller's own bank details at the foot of the page, the
+# "ในนาม / For <company>" above the signature.
+_BANK_CONTEXT_RE = re.compile(
+    r"ชื่อบัญชี|เลขที่บัญชี|ธนาคาร|ในนาม|โอนเงิน|Bank|Account",
+    re.IGNORECASE,
+)
+
+
+def _buyer_by_position(lines, seller_name, seller_block):
+    """The buyer when the document labels nobody.
+
+    Plenty of invoices print the two parties as two address blocks and
+    label neither — the letterhead, then the customer below it. Losing the
+    buyer there is expensive: with no name the document is classified ย่อ,
+    and ม.86/6 then wipes the subtotal and VAT it plainly showed. So take
+    the first OTHER company named after the seller's own block, which is
+    where the customer block sits. Only a line that names a company counts
+    — this is a positional guess, and a guess needs strong evidence."""
+    if not seller_name:
+        return None
+    start = max(seller_block) + 1 if seller_block else 0
+    for j in range(start, len(lines)):
+        line = lines[j].strip()
+        if not line or j in seller_block:
+            continue
+        if DOC_FURNITURE_RE.search(line) or TABLE_HEADER_LINE_RE.search(line):
+            continue
+        if SIGNATURE_CONTEXT_RE.search(line) or _BANK_CONTEXT_RE.search(line):
+            continue
+        if not COMPANY_NAME_HINT_RE.search(line):
+            continue
+        cand = _clean_buyer_value(line)
+        if _is_plausible_buyer_name(cand) and not _is_seller_name(cand, seller_name):
+            return cand
+    return None
+
+
 def extract_buyer_name(text, seller_name=None):
     lines = normalize_thai_text(text or "").splitlines()
     seller_block = _seller_block(lines, seller_name)
@@ -1212,7 +1250,8 @@ def extract_buyer_name(text, seller_name=None):
                 return near
             if fallback:
                 return fallback
-    return None
+    # No buyer label anywhere on the page — see _buyer_by_position.
+    return _buyer_by_position(lines, seller_name, seller_block)
 
 
 VAT_RATE = 0.07

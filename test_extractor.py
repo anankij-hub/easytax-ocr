@@ -1922,6 +1922,70 @@ V
 AUTHORIZED SIONATURE
 """
 
+# The บลูมมิ่ง ไลฟ์ invoice from the live app. It labels NEITHER party —
+# the seller's address block sits at the top, the customer's below it, and
+# no "ชื่อผู้ซื้อ" or "ลูกค้า" appears anywhere on the page. Every buyer
+# search is keyed on such a label, so the buyer came back empty, and one
+# missing name cost three more fields: no buyer means the document is
+# classified ย่อ, and ม.86/6 then wipes the subtotal and the VAT it plainly
+# printed. The user reported all four as separate errors; they are one.
+REAL_BLOOMING_RAW_TEXT = """บริษัท บลูมมิ่ง ไลฟ์ จำกัด
+120 ถนนเชียงใหม่-ลำพูน ตำบลหนองหอย อำเภอเมือง
+เชียงใหม่ จังหวัดเชียงใหม่ 50000
+เลขประจำตัวผู้เสียภาษี 0134563248907
+โทร 08756334210
+ใบกำกับภาษี
+TAX INVOICE
+เลขที่
+Inv001-57
+วันที่
+07/01/2025
+พนักงานขาย
+อโดรา มอนต์มินี
+บริษัท B จำกัด
+188 หมู่ 7 ถนนเชียงใหม่-ลำพูน ตำบลหนองผึ้ง อำเภอสารภี
+จังหวัดเชียงใหม่ 50140
+เลขประจำตัวผู้เสียภาษี 0505569234567
+ครบกำหนดชำระ 07/01/2025
+หมายเลขอ้างอิง 01057
+ล่าดับ
+1
+เครื่องคิดเลข
+2
+กระดาษทิชชู่
+3
+แก้วกระดาษ
+รายการ
+จำนวน
+หน่วยละ
+จำนวนเงิน
+2
+230.00
+460.00
+4
+80.00
+320.00
+3
+55.00
+165.00
+รวมทั้งสิ้น
+(เก้าร้อยสี่สิบห้าบาทถ้วน)
+ภาษีมูลค่าเพิ่ม 7%
+จำนวนเงินสุทธิ
+883.18 บาท
+61.82 บาท
+945.00 บาท
+ช่องทางการชำระเงิน:
+ชื่อบัญชี บริษัท บลูมมิ่ง ไลฟ์ จำกัด
+เลขที่บัญชี 0123 45678901
+ธนาคาร ABC
+D
+ผู้รับเงิน
+07/01/2025
+วันที่
+"""
+
+
 
 
 
@@ -3057,6 +3121,50 @@ def main():
         "an unrecognisable label in front of a separator is still stripped",
         extractor._clean_buyer_value("นามสื่อ / Name : บริษัท อิสาน พัฒนาการค้า จำกัด")
         == "บริษัท อิสาน พัฒนาการค้า จำกัด",
+    )
+
+    # regression: the บลูมมิ่ง ไลฟ์ invoice (see REAL_BLOOMING_RAW_TEXT)
+    fields23 = extractor.extract_fields(REAL_BLOOMING_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real บลูมมิ่ง ไลฟ์ OCR text fields ---")
+    for k, v in fields23.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real blooming: buyer found although the page labels nobody",
+        fields23["buyer_name"] == "บริษัท B จำกัด",
+    )
+    all_ok &= check(
+        "real blooming: a full tax invoice, not ย่อ",
+        fields23["doc_type"] == "เต็มรูป",
+    )
+    all_ok &= check("real blooming: subtotal survives ม.86/6", fields23["subtotal"] == 883.18)
+    all_ok &= check("real blooming: vat survives ม.86/6", fields23["vat"] == 61.82)
+    all_ok &= check("real blooming: total", fields23["total"] == 945.00)
+    all_ok &= check("real blooming: seller", fields23["seller_name"] == "บริษัท บลูมมิ่ง ไลฟ์ จำกัด")
+    all_ok &= check("real blooming: tax id", fields23["seller_tax_id"] == "0134563248907")
+    all_ok &= check("real blooming: invoice_no", fields23["invoice_no"] == "Inv001-57")
+    all_ok &= check("real blooming: date", fields23["invoice_date_iso"] == "2025-01-07")
+    all_ok &= check("real blooming: nothing left to review", fields23["needs_review"] is False)
+
+    # the positional fallback, checked on its own
+    all_ok &= check(
+        "the seller's own bank block is not mistaken for the buyer",
+        extractor._buyer_by_position(
+            ["บริษัท ผู้ขาย จำกัด", "ชื่อบัญชี บริษัท ผู้ขาย จำกัด", "ธนาคาร ABC"],
+            "บริษัท ผู้ขาย จำกัด", {0},
+        ) is None,
+    )
+    all_ok &= check(
+        "the signature's 'ในนาม <company>' is not either",
+        extractor._buyer_by_position(
+            ["บริษัท ผู้ขาย จำกัด", "ในนาม บริษัท ผู้ขาย จำกัด", "ผู้มีอำนาจลงนาม"],
+            "บริษัท ผู้ขาย จำกัด", {0},
+        ) is None,
+    )
+    all_ok &= check(
+        "a receipt naming only one party gains no invented buyer",
+        extractor.extract_fields(ABBREVIATED_RECEIPT_TEXT, ocr_confidence=80.0)["buyer_name"]
+        is None,
     )
 
     # multi-invoice split
