@@ -71,6 +71,38 @@ INVOICE_NO_KEYWORDS = [
 ]
 DATE_KEYWORDS = [r"วันที่", r"Date"]
 
+# Tried before the generic "วันที่"/"Date". An invoice prints several dates
+# — the issue date, the due date, the PO date — and a column-major OCR read
+# can put any of them first. Confirmed live: an invoice issued 15/09/2026
+# was filed as 2026-10-15, its credit-30-days due date, because
+# "วันที่ครบกำหนดชำระ" was read out before "วันที่ออกใบกำกับภาษี".
+ISSUE_DATE_KEYWORDS = [
+    r"วันที่ออกใบกำกับภาษี", r"วันที่ออกใบเสร็จ", r"วันที่ออกเอกสาร",
+    r"วันที่ใบกำกับภาษี", r"วันที่เอกสาร",
+    r"Tax\s*Invoice\s*Date", r"Invoice\s*Date", r"Date\s*of\s*Issue",
+    r"Issue\s*Date",
+]
+
+# Dates that belong to some OTHER field. The Thai labels run ON from the
+# keyword ("วันที่" + "ครบกำหนดชำระ"); the English ones run BEFORE it ("Due"
+# + "Date"), so each side is checked against its own pattern, anchored to
+# the match so a second label further along the same line can't trip it.
+_OTHER_DATE_SUFFIX_RE = re.compile(
+    r"\s*(?:ครบกำหนด|กำหนดชำระ|นัดชำระ|สั่งซื้อ|รับสินค้า|ส่งสินค้า|หมดอายุ)"
+)
+_OTHER_DATE_PREFIX_RE = re.compile(
+    r"(?:Due|Payment|Delivery|Received|Order|Expiry|Ship(?:ping)?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_other_field_date(text, m):
+    """True when the date keyword matched at `m` labels a date other than
+    the document's own — a due date, a PO date, a delivery date."""
+    if _OTHER_DATE_SUFFIX_RE.match(text, m.end()):
+        return True
+    return bool(_OTHER_DATE_PREFIX_RE.search(text[max(0, m.start() - 24):m.start()]))
+
 # Matches dd/mm/yyyy AND yyyy/mm/dd. The leading group allows four digits
 # so a year-first date is captured whole: against the old \d{1,2} opener,
 # "2025/02/18" matched starting from its third character, giving "25/02/18"
@@ -577,23 +609,26 @@ def _in_prose_line(text, pos):
 
 
 def extract_date(text):
-    for kw in DATE_KEYWORDS:
-        for m in re.finditer(kw, text):
-            if _in_signature_block(text, m.start()) or _in_prose_line(text, m.start()):
-                continue
-            # Window needs to be wide enough to skip past an intervening
-            # bilingual English sub-label (e.g. "วันที่เอกสาร\nDocument
-            # Date\n02/08/2025") without truncating the date itself.
-            window_text = text[m.end():m.end() + 60]
-            dm = DATE_TOKEN_RE.search(window_text)
-            if dm:
-                iso = _parse_thai_date(dm.group(0))
-                return dm.group(0), iso
-            for name in THAI_MONTHS:
-                dm2 = re.search(r"\d{1,2}\s*" + re.escape(name) + r"\s*\d{4}", window_text)
-                if dm2:
-                    iso = _parse_thai_date(dm2.group(0))
-                    return dm2.group(0), iso
+    for keywords in (ISSUE_DATE_KEYWORDS, DATE_KEYWORDS):
+        for kw in keywords:
+            for m in re.finditer(kw, text, re.IGNORECASE):
+                if _in_signature_block(text, m.start()) or _in_prose_line(text, m.start()):
+                    continue
+                if _is_other_field_date(text, m):
+                    continue
+                # Window needs to be wide enough to skip past an intervening
+                # bilingual English sub-label (e.g. "วันที่เอกสาร\nDocument
+                # Date\n02/08/2025") without truncating the date itself.
+                window_text = text[m.end():m.end() + 60]
+                dm = DATE_TOKEN_RE.search(window_text)
+                if dm:
+                    iso = _parse_thai_date(dm.group(0))
+                    return dm.group(0), iso
+                for name in THAI_MONTHS:
+                    dm2 = re.search(r"\d{1,2}\s*" + re.escape(name) + r"\s*\d{4}", window_text)
+                    if dm2:
+                        iso = _parse_thai_date(dm2.group(0))
+                        return dm2.group(0), iso
     # Fallback: any date-looking token in the whole document — but only one
     # that actually resolves to a real calendar date. A phone number or a
     # bank account can match the shape ("456-7-89012-3" yields "56-7-8901")
@@ -640,6 +675,20 @@ def _is_field_label_line(line):
 _SELLER_SEARCH_LINES = 20
 
 
+# How far below a bare buyer label ("ลูกค้า / Customer") a company name is
+# still that label's value.
+_BUYER_LABEL_REACH = 2
+
+
+def _under_buyer_label(lines, i, reach=_BUYER_LABEL_REACH):
+    """True when line `i` sits directly below a bare buyer label, so the
+    company name on it belongs to the CUSTOMER box, not the letterhead."""
+    for j in range(max(0, i - reach), i):
+        if _is_bare_buyer_label(lines[j]):
+            return True
+    return False
+
+
 def extract_seller_name(text):
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     # Prefer a line that actually looks like a registered company name —
@@ -647,13 +696,34 @@ def extract_seller_name(text):
     # its own line above the real registered name ("บริษัท โมชิ โมชิ รีเทล
     # คอร์ปอเรชั่น จำกัด (มหาชน)"), and a plain "first short line" heuristic
     # grabs the logo text instead of the real name.
-    for line in lines[:_SELLER_SEARCH_LINES]:
+    # A company name standing right under "ลูกค้า / Customer" is the
+    # customer's, and on a column-major read the customer box can be OCR'd
+    # ahead of the letterhead. Confirmed live: an invoice put the buyer in
+    # the ชื่อบริษัทผู้ออกใบกำกับ box and the seller in ชื่อผู้ซื้อ — the two
+    # swapped — because the buyer's name happened to be printed first. Such
+    # a candidate is held back and used only if the page offers no other.
+    deferred = {}
+    for i, line in enumerate(lines[:_SELLER_SEARCH_LINES]):
         if re.search(TAXINV_MARKER, line) or re.search(RECEIPT_MARKER, line):
             continue
         if re.search(r"\d{10,}", line) or _is_field_label_line(line):
             continue
         if len(line) >= 5 and COMPANY_NAME_HINT_RE.search(line):
+            if _under_buyer_label(lines, i):
+                deferred[i] = line
+                continue
+            # A letterhead reads "<Thai name>" then "<English name>". When
+            # the buyer box was OCR'd just above it, the Thai half can fall
+            # inside the label's reach and be held back, leaving only the
+            # English twin — which named the seller in Latin script on a
+            # page that is otherwise entirely Thai. They are the same
+            # company, so take the Thai one back.
+            twin = deferred.get(i - 1)
+            if twin and _is_latin_script(line) and not _is_latin_script(twin):
+                return twin
             return line
+    if deferred:
+        return deferred[min(deferred)]
     # fallback: first short-ish non-marker line
     for line in lines[:8]:
         if re.search(TAXINV_MARKER, line) or re.search(RECEIPT_MARKER, line):

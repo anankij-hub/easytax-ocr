@@ -1295,6 +1295,112 @@ CUST-0152
 136,425.00
 """
 
+# The กรีนฟิลด์ invoice from the live app. Google Vision read the CUSTOMER
+# box before the letterhead, so the page opens "ลูกค้า / Customer" /
+# "บริษัท สตาร์เทรดดิ้ง จำกัด" / "บริษัท กรีนฟิลด์ ออฟฟิศ ซัพพลาย จำกัด" —
+# the buyer's name printed above the seller's. Taking the first
+# company-looking line as the seller put the two names in each other's
+# boxes: the buyer was filed as the issuer and the issuer as the buyer.
+# The page also carries three dates, and the credit-30-days due date
+# ("วันที่ครบกำหนดชำระ : 15/10/2026") was read out ahead of the issue date
+# ("วันที่ออกใบกำกับภาษี / 15/09/2026"), so the invoice was filed a month
+# late, under its own payment deadline.
+REAL_GREENFIELD_RAW_TEXT = """GREENFIELD
+OFFICE SUPPLY
+ลูกค้า / Customer
+บริษัท สตาร์เทรดดิ้ง จำกัด
+บริษัท กรีนฟิลด์ ออฟฟิศ ซัพพลาย จำกัด
+Greenfield Office Supply Co., Ltd.
+88/9 ถนนสุขวิต ตำบลบางจาก อำเภอพระโขนง จังหวัดกรุงเทพมหานคร 10260
+เลขประจำตัวผู้เสียภาษี : 0105567012348 (สำนักงานใหญ่)
+โทร. 02-779-8899 | อีเมล : sales@greenfield.co.th
+99/1 ถนนตัวอย่าง แขวงดินแดง เขตดินแดง
+กรุงเทพมหานคร 10400
+เลขประจำตัวผู้เสียภาษี : 0123456789012
+เลขที่ใบสั่งซื้อ (PO No.)
+: PO-2026-0775
+เงื่อนไขการชำระเงิน
+วันที่ครบกำหนดชำระ
+: เครดิต 30 วัน
+: 15/10/2026
+พนักงานขาย
+: คุณณัฐชา
+ใบกำกับภาษี
+TAX INVOICE
+ต้นฉบับ / ORIGINAL
+เอกสารเลขที่
+GF-INV-2026-0098
+วันที่ออกใบกำกับภาษี
+15/09/2026
+ลำดับ
+No.
+รายการสินค้า / บริการ
+Description
+จำนวน
+หน่วย
+Quantity
+Unit
+ราคาต่อหน่วย
+(บาท)
+Unit Price (Baht)
+จำนวนเงิน
+(บาท)
+Amount (Baht)
+1
+กระดาษถ่ายเอกสาร A4 (500 แผ่น)
+10
+10
+รีม
+135.00
+1,350.00
+2
+ปากกาลูกลื่น (สีน้ำเงิน)
+550
+ด้าม
+12.00
+600.00
+3
+แฟ้มเอกสารสันกว้าง
+20
+เล่ม
+55.00
+1,100.00
+4
+สมุดโน้ต A5
+30
+เล่ม
+25.00
+750.00
+5
+กล่องเก็บเอกสาร
+10
+กล่อง
+120.00
+1,200.00
+หมายเหตุ / Remark
+1. สินค้ารวมภาษีมูลค่าเพิ่มแล้ว
+2. กรุณาตรวจสอบรายการสินค้า/บริการและจำนวนเงินให้ถูกต้อง
+3. หากมีข้อสงสัยกรุณาติดต่อฝ่ายขาย
+B
+ผู้มีอำนาจลงนาม
+(Authorized Signature)
+นางสาวกมลวรรณ ใจดี
+กรรมการผู้จัดการ
+มูลค่าสินค้า/บริการ (Subtotal)
+5,000.00
+ภาษีมูลค่าเพิ่ม 7% (VAT 7%)
+รวมเงินทั้งสิ้น (Total)
+350.00
+5,350.00
+(ห้าพันสามร้อยห้าสิบบาทถ้วน)
+ขอขอบคุณที่ใช้บริการ
+Thank you for your business
+SAMPLE - TEST ONLY - NOT VALID FOR TAX
+เอกสารนี้จัดทำขึ้นเพื่อการทดสอบระบบเท่านั้น
+(This document is generated for system testing purposes only)
+"""
+
+
 
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
@@ -2170,6 +2276,59 @@ def main():
     all_ok &= check(
         "bilingual label remnant stripped from buyer name",
         derived_total["buyer_name"] == "บริษัท เอ จำกัด",
+    )
+
+    # regression: the กรีนฟิลด์ invoice (see REAL_GREENFIELD_RAW_TEXT)
+    fields18 = extractor.extract_fields(REAL_GREENFIELD_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real กรีนฟิลด์ OCR text fields ---")
+    for k, v in fields18.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real greenfield: seller is the issuer, not the customer read above it",
+        fields18["seller_name"] == "บริษัท กรีนฟิลด์ ออฟฟิศ ซัพพลาย จำกัด",
+    )
+    all_ok &= check(
+        "real greenfield: buyer is the customer, not the issuer",
+        fields18["buyer_name"] == "บริษัท สตาร์เทรดดิ้ง จำกัด",
+    )
+    all_ok &= check(
+        "real greenfield: date = issue date 2026-09-15 (not due date 2026-10-15)",
+        fields18["invoice_date_iso"] == "2026-09-15",
+    )
+    all_ok &= check("real greenfield: invoice_no", fields18["invoice_no"] == "GF-INV-2026-0098")
+    all_ok &= check("real greenfield: tax id", fields18["seller_tax_id"] == "0105567012348")
+    all_ok &= check("real greenfield: subtotal", fields18["subtotal"] == 5000.00)
+    all_ok &= check("real greenfield: vat", fields18["vat"] == 350.00)
+    all_ok &= check("real greenfield: total", fields18["total"] == 5350.00)
+    all_ok &= check("real greenfield: doc_type", fields18["doc_type"] == "เต็มรูป")
+
+    # the two halves of the fix, checked on their own
+    all_ok &= check(
+        "a name under 'ลูกค้า / Customer' is not the seller",
+        extractor._under_buyer_label(
+            ["ลูกค้า / Customer", "บริษัท สตาร์เทรดดิ้ง จำกัด"], 1
+        ),
+    )
+    all_ok &= check(
+        "a name under an address line still is",
+        extractor._under_buyer_label(["99/1 ถนนตัวอย่าง", "บริษัท ข จำกัด"], 1) is False,
+    )
+    all_ok &= check(
+        "a due-date label is not the document's date",
+        extractor._is_other_field_date(
+            "วันที่ครบกำหนดชำระ", re.search("วันที่", "วันที่ครบกำหนดชำระ")
+        ),
+    )
+    all_ok &= check(
+        "'Due Date' is not either",
+        extractor._is_other_field_date("Due Date", re.search("Date", "Due Date")),
+    )
+    all_ok &= check(
+        "the issue-date label still is",
+        extractor._is_other_field_date(
+            "วันที่ออกใบกำกับภาษี", re.search("วันที่", "วันที่ออกใบกำกับภาษี")
+        ) is False,
     )
 
     # multi-invoice split
