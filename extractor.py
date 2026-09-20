@@ -593,10 +593,66 @@ def _invoice_no_under_title(text):
     return None
 
 
+# How many lines above its label a document number may be found.
+_DOC_NO_LOOKBACK = 3
+
+
+def _looks_like_doc_no(line):
+    """A token that could be a document number and nothing else: it holds
+    a digit AND something that is not a digit, so a bare house number
+    ("789") or a quantity can't qualify, and it is long enough that a page
+    marker ("1/1") can't either."""
+    line = line.strip()
+    if len(line) < 5 or not DOC_VALUE_LINE_RE.match(line):
+        return False
+    if not re.search(r"\d", line) or not re.search(r"[A-Za-z\-]", line):
+        return False
+    if re.fullmatch(r"\d{10,}", line) or _parse_thai_date(line):
+        return False
+    return True
+
+
+def _invoice_no_above_label(text):
+    """The number printed on the line ABOVE its label.
+
+    A boxed header is read column by column, and the value column can come
+    out before the label column. Confirmed live: an invoice printed
+    "INV-2026-091" then "ลูกค้า / Customer" then "เลขที่ใบกำกับภาษี", so the
+    forward search ran past the label, through the customer box, and
+    returned "789" — the house number of the buyer's address.
+
+    Only considered when the label stands alone on its line: a label with
+    its value beside it needs no guessing. The value is not always on the
+    line immediately above — on the invoice above, the customer box's
+    heading was emitted between the two — so a few label lines are stepped
+    over, but anything else ends the search: a line that carries real
+    content and is not the number means we have left the header box."""
+    lines = [l.strip() for l in text.splitlines()]
+    for i, line in enumerate(lines):
+        if i == 0 or re.search(r"\d", line):
+            continue
+        if not any(re.search(kw, line) for kw in INVOICE_NO_KEYWORDS):
+            continue
+        for j in range(i - 1, max(-1, i - 1 - _DOC_NO_LOOKBACK), -1):
+            prev = lines[j]
+            if _looks_like_doc_no(prev):
+                return prev
+            if prev and not _is_field_label_line(prev) and not DOC_FURNITURE_RE.search(prev):
+                break
+    return None
+
+
 def extract_invoice_no(text):
     val = _find_after_keyword(
         text, INVOICE_NO_KEYWORDS, value_pattern=r"[A-Za-z0-9\-/]{3,}", require_digit=True
     )
+    # A value the forward search had to wander to is worth less than one
+    # sitting right above the label, so an above-the-label number wins
+    # unless the forward search found a proper document number too.
+    if val is None or not _looks_like_doc_no(val):
+        above = _invoice_no_above_label(text)
+        if above:
+            return above
     return val or _invoice_no_under_title(text)
 
 
@@ -1032,6 +1088,19 @@ def _skip_as_buyer_candidate(line):
 _BUYER_LABEL_MAX_LINE_LEN = 100
 
 
+# A line that is nothing but a generic "name of..." label. These carry no
+# buyer keyword at all, so _is_bare_buyer_label never saw them: confirmed
+# live, a customer box headed "ลูกค้า / Customer" then labelled its value
+# "ชื่อบริษัท", and that label went into the ชื่อผู้ซื้อ box while the name on
+# the next line was never reached. Anchored and closed so that a real name
+# beginning with the same word ("ชื่อบริษัทในเครือ ...") is not caught.
+_BARE_NAME_LABEL_RE = re.compile(
+    r"^(?:ชื่อ(?:บริษัท|หน่วยงาน|กิจการ|นิติบุคคล|ร้าน|สถานประกอบการ)?|นาม)"
+    r"\s*[:：/|｜\-–]?\s*(?:Company(?:\s*Name)?|Name)?\s*[:：/|｜\-–]?\s*$",
+    re.IGNORECASE,
+)
+
+
 def _is_bare_buyer_label(line):
     """True when the line is JUST a buyer label — "ชื่อลูกค้า", "ลูกค้า /
     Customer", "รหัสลูกค้า / CUSTOMER" — rather than a name that happens to
@@ -1041,6 +1110,8 @@ def _is_bare_buyer_label(line):
 
     Strip the keyword, the English half, and any punctuation; a label has
     almost nothing left ("ชื่อ", "รหัส", ""), a name still has words."""
+    if _BARE_NAME_LABEL_RE.match(line.strip()):
+        return True
     if not any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS):
         return False
     # Strip the plain label words, not BUYER_KEYWORDS — those carry

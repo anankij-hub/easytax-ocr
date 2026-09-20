@@ -1985,6 +1985,134 @@ D
 วันที่
 """
 
+# The บลูมแอนด์โค invoice from the live app. Its header box was read column
+# by column, values before labels, so the page runs "INV-2026-091" /
+# "ลูกค้า / Customer" / "เลขที่ใบกำกับภาษี" — the number two lines ABOVE the
+# label that names it. The forward search therefore ran past the label,
+# into the customer box, and filed the invoice under "789", the house
+# number of the buyer's address. The customer box then labels its value
+# "ชื่อบริษัท", which carries no buyer keyword at all, so that label itself
+# was recorded as the buyer's name and the name on the next line was
+# never reached.
+REAL_BLOOMANDCO_RAW_TEXT = """"สิ่งเล็ก ๆ
+สร้างความสุขได้เสมอ"
+GOOD THINGS
+FOR A BRIGHTER DAY
+ใบกำกับภาษี
+TAX
+INVOICE
+ต้นฉบับ / ORIGINAL
+BLOOM&CO.
+LIFESTYLE FOR A BETTER YOU
+บริษัท บลูมแอนด์โค ไลฟ์สไตล์ จำกัด
+เลขประจำตัวผู้เสียภาษีอากร 0105567004321
+321/45 ถนนนิมมานเหมินทร์ ตำบลสุเทพ
+อำเภอเมืองเชียงใหม่ จังหวัดเชียงใหม่ 50200
+โทร. 053-214-789 อีเมล: info@bloomandco.co.th
+เว็บไซต์: www.bloomandco.co.th
+INV-2026-091
+ลูกค้า / Customer
+เลขที่ใบกำกับภาษี
+ชื่อบริษัท
+บริษัท เวลเนส พลัส จำกัด
+ที่อยู่
+789 หมู่ 3 ถนนวงแหวนรอบสอง
+ตำบลสันผีเสื้อ อำเภอเมืองเชียงใหม่
+วันที่ออกใบกำกับภาษี
+05/09/2569
+วันครบกำหนดชาระเงิน
+05/10/2569
+เงื่อนไขการชาระเงิน
+30 วัน
+จังหวัดเชียงใหม่ 50300
+เลขประจำตัวผู้เสียภาษีอากร 0505567004321
+พนักงานขาย
+น.ส. ปรียาภรณ์ ใจดี
+0
+รหัสลูกค้า
+WL-0036
+ลำดับ
+No.
+รายการสินค้า / รายละเอียด
+Description
+จำนวน หน่วย
+ราคาต่อหน่วย
+ส่วนลด
+Quantity
+Unit
+Unit Price (THB)
+Discount (THB)
+จำนวนเงิน
+Amount (THB)
+1
+ชุดกล่องของขวัญ Premium Set
+เก
+5
+ชุด
+950.00
+250.00
+4,500.00
+2 แก้วน้ำสแตนเลส สีชมพู 500 ml
+20
+ใบ
+350.00
+0.00
+7,000.00
+3 สมุดโน้ตปกหนัง PU
+15
+เล่ม
+180.00
+150.00
+2,550.00
+4
+ปากกาลูกลื่น รุ่น Blossom
+50
+ก้าม
+45.00
+0.00
+2,250.00
+5
+ถุงผ้าสกรีนโลโก้ ขนาด M
+30
+ใบ
+2
+60.00
+300.00
+1,500.00
+รวมเป็นเงิน / Subtotal
+18,800.00
+หมายเหตุ / Remark
+1. ราคานี้รวมค่าจัดส่งเรียบร้อยแล้ว
+2. สินค้าไม่สามารถเปลี่ยนหรือคืนได้ ยกเว้นกรณีสินค้าชำรุดจากการผลิต
+3. หากมีข้อสงสัย กรุณาติดต่อฝ่ายบริการลูกค้า โทร. 053-214-789 ต่อ 101
+Thank you OR YOUR SUPPORT
+ช่องทางการชำระเงิน / Payment Method
+จำนวนเงินรวมทั้งสิ้น
+Grand Total
+สแกนเพื่อชำระเงิน
+Scan to Pay
+หัก ส่วนลดรวม / Total Discount
+700.00
+มูลค่าสินค้าหลังหักส่วนลด
+18,100.00
+ภาษีมูลค่าเพิ่ม (VAT 7%)
+1,267.00
+19,367.00
+ธนาคารกสิกรไทย จำกัด (มหาชน)
+KASIKORNBANK PCL.
+เลขที่บัญชี 987-6-54321-0
+ชื่อบัญชี บริษัท บลูมแอนด์โค ไลฟ์สไตล์ จำกัด
+ขอบคุณที่ไว้วางใจในสินค้าและบริการของเรา
+Prompt Pay
+ขอแสดงความนับถือ
+P.J.
+(น.ส. ปรียาภรณ์ ใจดี )
+ผู้มีอำนาจลงนาม
+Authorized Signature
+BLOOMING HAPPINESS IN EVERYDAY LIFE
+"""
+
+
 
 
 
@@ -3165,6 +3293,57 @@ def main():
         "a receipt naming only one party gains no invented buyer",
         extractor.extract_fields(ABBREVIATED_RECEIPT_TEXT, ocr_confidence=80.0)["buyer_name"]
         is None,
+    )
+
+    # regression: the บลูมแอนด์โค invoice (see REAL_BLOOMANDCO_RAW_TEXT)
+    fields24 = extractor.extract_fields(REAL_BLOOMANDCO_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real บลูมแอนด์โค OCR text fields ---")
+    for k, v in fields24.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real bloomandco: invoice_no read from above its label, not the buyer's house number",
+        fields24["invoice_no"] == "INV-2026-091",
+    )
+    all_ok &= check(
+        "real bloomandco: buyer is the name, not the label 'ชื่อบริษัท'",
+        fields24["buyer_name"] == "บริษัท เวลเนส พลัส จำกัด",
+    )
+    all_ok &= check(
+        "real bloomandco: seller",
+        fields24["seller_name"] == "บริษัท บลูมแอนด์โค ไลฟ์สไตล์ จำกัด",
+    )
+    all_ok &= check("real bloomandco: tax id", fields24["seller_tax_id"] == "0105567004321")
+    all_ok &= check("real bloomandco: date", fields24["invoice_date_iso"] == "2026-09-05")
+    all_ok &= check("real bloomandco: subtotal", fields24["subtotal"] == 18100.00)
+    all_ok &= check("real bloomandco: vat", fields24["vat"] == 1267.00)
+    all_ok &= check("real bloomandco: total", fields24["total"] == 19367.00)
+    all_ok &= check("real bloomandco: doc_type", fields24["doc_type"] == "เต็มรูป")
+
+    # the two fixes, checked on their own
+    all_ok &= check(
+        "a house number is not a document number",
+        extractor._looks_like_doc_no("789") is False,
+    )
+    all_ok &= check(
+        "a page marker is not either",
+        extractor._looks_like_doc_no("1/1") is False,
+    )
+    all_ok &= check(
+        "a date is not either",
+        extractor._looks_like_doc_no("05/09/2569") is False,
+    )
+    all_ok &= check(
+        "a real document number is",
+        extractor._looks_like_doc_no("INV-2026-091"),
+    )
+    all_ok &= check(
+        "'ชื่อบริษัท' is a label, not a buyer's name",
+        extractor._is_bare_buyer_label("ชื่อบริษัท"),
+    )
+    all_ok &= check(
+        "a company actually named that way is not a label",
+        extractor._is_bare_buyer_label("บริษัท เวลเนส พลัส จำกัด") is False,
     )
 
     # multi-invoice split
