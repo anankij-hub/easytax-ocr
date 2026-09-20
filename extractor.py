@@ -719,7 +719,10 @@ BUYER_ENTITY_HINT_RE = re.compile(
     # "สำนักงานใหญ่" is a BRANCH marker (head office), not a company name —
     # a letterhead's logo line "ARUN TEST สาขา สำนักงานใหญ่" was picked as
     # the buyer because of it.
-    r"วิทยาลัย|โรงเรียน|โรงพยาบาล|สำนักงาน(?!ใหญ่)|องค์การ|องค์กร|กรม|กระทรวง|เทศบาล|สหกรณ์|"
+    # "สำนักงาน" must START the word: an office-supplies seller's tagline
+    # ("จำหน่ายอุปกรณ์ไอที / อุปกรณ์สำนักงาน / และโซลูชั่น...") was read as the
+    # buyer because "อุปกรณ์สำนักงาน" contains it.
+    r"วิทยาลัย|โรงเรียน|โรงพยาบาล|(?:^|\s)สำนักงาน(?!ใหญ่)|องค์การ|องค์กร|กรม|กระทรวง|เทศบาล|สหกรณ์|"
     r"มูลนิธิ|สมาคม|Co\.,?\s*Ltd|Ltd|P(?:ublic)?\s*Co|Company|Corp|Foundation|University|School",
     re.IGNORECASE,
 )
@@ -863,6 +866,11 @@ def _is_latin_script(line):
     return len(re.findall(r"[A-Za-z]", line)) >= 3 and not re.search(r"[ก-๙]", line)
 
 
+# How much further away a line above the label may be judged, so that a
+# line below it wins only when it is genuinely close.
+_ABOVE_LABEL_PENALTY = 2
+
+
 def _seller_block(lines, seller_name, radius=2):
     """Line numbers of the seller's letterhead — the line carrying its name
     plus its immediate neighbours, which hold the SAME name in the other
@@ -914,8 +922,12 @@ def _nearest_entity_name(lines, label_idx, seller_name, max_distance=25, skip_id
             continue
         if not BUYER_ENTITY_HINT_RE.search(cand):
             continue
+        # Nearest wins, with a small preference for lines BELOW the label
+        # (normal reading order). Preferring every line below over every
+        # line above, regardless of distance, let a tagline thirteen lines
+        # down beat the real buyer four lines up.
         dist = j - label_idx
-        rank = (0, dist) if dist > 0 else (1, -dist)  # after the label first
+        rank = dist if dist > 0 else -dist + _ABOVE_LABEL_PENALTY
         if best is None or rank < best[0]:
             best = (rank, cand)
     return best[1] if best else None
@@ -1422,17 +1434,46 @@ def _extract_doc_info_block(text):
             j += 1
         if len(labels) < 2:
             continue
-        values = []
+        # The values don't always start where the labels end. Confirmed
+        # live: OCR dropped the buyer's address and taxpayer ID into the
+        # middle of the document box, breaking the label run and putting a
+        # stray 13-digit number where the values should start. So scan
+        # forward for runs of value-shaped lines and take the first run
+        # that yields a sound pairing — a document number is not a taxpayer
+        # ID, and a document date has to be a real date.
         k = j
-        while k < n and lines[k] and DOC_VALUE_LINE_RE.match(lines[k]):
-            values.append(lines[k])
-            k += 1
-        if not values:
-            continue
-        return dict(zip(labels, values))  # zip stops at the shorter list,
-        # so a blank trailing field (fewer values than labels) just isn't
-        # included in the result rather than causing a mismatch
+        while k < n and k - j <= _DOC_INFO_MAX_GAP:
+            if not (lines[k] and DOC_VALUE_LINE_RE.match(lines[k])):
+                k += 1
+                continue
+            values = []
+            while k < n and lines[k] and DOC_VALUE_LINE_RE.match(lines[k]):
+                values.append(lines[k])
+                k += 1
+            pairing = dict(zip(labels, values))  # zip stops at the shorter
+            # list, so a blank trailing field just isn't included
+            if _doc_info_pairing_is_sound(pairing):
+                return pairing
     return {}
+
+
+# How far past the labels a document box's values may sit before we stop
+# believing they belong together.
+_DOC_INFO_MAX_GAP = 15
+
+
+def _doc_info_pairing_is_sound(pairing):
+    """Reject a label/value alignment that produced something a document
+    number and date plainly are not."""
+    doc_no = pairing.get("doc_no")
+    if not doc_no or re.fullmatch(r"\d{10,}", doc_no):
+        return False  # a bare long number is a taxpayer ID, not a doc no.
+    if _parse_thai_date(doc_no):
+        return False  # a date landed in the number's slot: misaligned by one
+    doc_date = pairing.get("doc_date")
+    if doc_date is not None and _parse_thai_date(doc_date) is None:
+        return False
+    return True
 
 
 def extract_fields(text, ocr_confidence=None):

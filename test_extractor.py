@@ -1234,6 +1234,68 @@ SAMPLE – TEST ONLY – NOT VALID FOR TAX
 """
 
 
+# Raw OCR text from the live app for the พรเจริญ เทคโนโลยี invoice
+# INV-6808-015. Two fields were wrong, both because OCR shuffled unrelated
+# blocks into the middle of others:
+#   - The buyer's ADDRESS ("55/99 หมู่ 6 ถนนมหิดล...") landed between the
+#     "เลขที่ / NO." label and its value, so "55/99" was filed as the
+#     invoice number.
+#   - The seller's tagline ("จำหน่ายอุปกรณ์ไอที / อุปกรณ์สำนักงาน / และ
+#     โซลูชั่น...") landed below the buyer label. "อุปกรณ์สำนักงาน" counted
+#     as an entity name because of "สำนักงาน", and beat the real buyer four
+#     lines ABOVE the label, since any line below used to outrank any line
+#     above no matter the distance.
+REAL_PORNJAROEN_RAW_TEXT = """ว
+PORNJAROEN
+TECHNOLOGY
+บริษัท พรเจริญ เทคโนโลยี จำกัด (สำนักงานใหญ่)
+PORNJAROEN TECHNOLOGY CO., LTD. (Head Office)
+128/56 ถนนเชียงใหม่-ลำพูน ตำบลหนองหอย อำเภอเมืองเชียงใหม่ จังหวัดเชียงใหม่ 50000
+โทร. 053-248-789 อีเมล: info@pornjaroentech.co.th เว็บไซต์: www.pornjaroentech.co.th
+เลขประจำตัวผู้เสียภาษีอากร / Tax ID
+9900000200421
+นามผู้ฌอ / Name
+บริษัท เชียงใหม่ ดีไซน์ จำกัด
+ที่อยู่ / Address
+ใบเสร็จรับเงิน / ใบกำกับภาษี
+RECEIPT / TAX INVOICE
+ต้นฉบับสำหรับลูกค้า / Original
+เลขที่ / NO.
+วันที่ / DATE
+55/99 หมู่ 6 ถนนมหิดล ตำบลสุเทพ อำเภอเมืองเชียงใหม่
+จังหวัดเชียงใหม่ 50200
+เลขประจำตัวผู้เสียภาษีอากร / Tax ID
+0505567001234
+เครดิต / CREDIT
+วันครบกำหนด / DUE DATE
+เลขที่ใบสั่งซื้อ / PO.NO
+พนักงานขาย / SALEMAN
+รหัสลูกค้า / CUSTOMER
+จำหน่ายอุปกรณ์ไอที
+อุปกรณ์สำนักงาน
+และโชลูชั่นด้านเทคโนโลยี
+INV-6808-015
+18/08/2568
+30 วัน
+17/09/2568
+PO-6808-0312
+น.ส. กฤตยา ใจดี
+CUST-0152
+สินค้าก่อนหักส่วนลด
+129,750.00
+หัก ส่วนลดรวม
+2,250.00
+มูลค่าสินค้าหลังหักส่วนลด
+ภาษีมูลค่าเพิ่ม (VAT 7%)
+หัก เงินมัดจำ
+รวมมูลค่าทั้งสิ้น
+127,500.00
+8,925.00
+0.00
+136,425.00
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -1952,6 +2014,47 @@ def main():
         extractor._totals_pairing_is_sound(
             {"subtotal": "119,100.00", "vat": "8,337.00", "total": "127,437.00"}
         ),
+    )
+
+    # regression: the พรเจริญ invoice (see REAL_PORNJAROEN_RAW_TEXT)
+    fields17 = extractor.extract_fields(REAL_PORNJAROEN_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real พรเจริญ OCR text fields ---")
+    for k, v in fields17.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real pornjaroen: invoice_no = INV-6808-015 (not the address '55/99')",
+        fields17["invoice_no"] == "INV-6808-015",
+    )
+    all_ok &= check(
+        "real pornjaroen: buyer is the customer, not the seller's tagline",
+        fields17["buyer_name"] == "บริษัท เชียงใหม่ ดีไซน์ จำกัด",
+    )
+    all_ok &= check("real pornjaroen: date = 2025-08-18", fields17["invoice_date_iso"] == "2025-08-18")
+    all_ok &= check("real pornjaroen: subtotal", fields17["subtotal"] == 127500.00)
+    all_ok &= check("real pornjaroen: vat", fields17["vat"] == 8925.00)
+    all_ok &= check("real pornjaroen: total", fields17["total"] == 136425.00)
+
+    all_ok &= check(
+        "'อุปกรณ์สำนักงาน' (office supplies) is not an entity name",
+        extractor.BUYER_ENTITY_HINT_RE.search("อุปกรณ์สำนักงาน") is None,
+    )
+    all_ok &= check(
+        "'สำนักงานบัญชี รุ่งเรือง' still is one",
+        bool(extractor.BUYER_ENTITY_HINT_RE.search("สำนักงานบัญชี รุ่งเรือง")),
+    )
+    # a document box's pairing has to survive being scanned for
+    all_ok &= check(
+        "a taxpayer ID is not accepted as a document number",
+        extractor._doc_info_pairing_is_sound({"doc_no": "0505567001234"}) is False,
+    )
+    all_ok &= check(
+        "a date is not accepted as a document number",
+        extractor._doc_info_pairing_is_sound({"doc_no": "13/04/68"}) is False,
+    )
+    all_ok &= check(
+        "a real document number and date are accepted",
+        extractor._doc_info_pairing_is_sound({"doc_no": "INV-6808-015", "doc_date": "18/08/2568"}),
     )
 
     # regression: buyer name (ชื่อผู้ซื้อ). Reported from the live app on the
