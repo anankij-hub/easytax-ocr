@@ -1400,6 +1400,141 @@ SAMPLE - TEST ONLY - NOT VALID FOR TAX
 (This document is generated for system testing purposes only)
 """
 
+# The บลูมูน invoice from the live app. Two separate defects.
+# (1) The letterhead prints the logo wordmark "BLUEMOON" / "TRADING CO.,
+#     LTD." above the registered name, and that second line was taken for
+#     the company — the seller was filed as "TRADING CO., LTD.". The
+#     registered name itself came out broken in two AND in reverse order,
+#     "เทรดดิ้ง จำกัด" before "บริษัท บลูมูน", so even finding the right line
+#     yielded only half a name.
+# (2) The seller's taxpayer ID is letter-spaced across its box
+#     ("0 5 0 5512345678") and matched no plain 13-digit run, so the first
+#     13 digits found on the page were the CUSTOMER's 0994000123456 —
+#     filed as the issuer's ID.
+REAL_BLUEMOON_RAW_TEXT = """BLUEMOON
+TRADING CO., LTD.
+GOOD PRODUCTS BETTER EVERYDAY
+เทรดดิ้ง จำกัด
+บริษัท บลูมูน
+BLUEMOON TRADING CO., LTD.
+789/12 หมู่ 5 ถนนซุปเปอร์ไฮเวย์ ตำบลฟ้าฮ่าม
+อำเภอเมืองเชียงใหม่ จังหวัดเชียงใหม่ 50000
+โทร. 052-010-789 แฟกซ์ 052-010-790
+อีเมล: info@bluemoontrading.co.th
+เว็บไซต์: www.bluemoontrading.co.th
+เลขประจำตัวผู้เสียภาษีอากร 0 5 0 5512345678
+(สำนักงานใหญ่)
+ใบกำกับภาษีเต็มรูป
+TAX INVOICE
+TRUST
+QUALITY
+PARTNERSHIP
+FOR A BRIGHTER
+TOMORROW
+"เคียงข้างธุรกิจคุณ
+ในทุกเส้นทาง"
+ข้อมูลใบกำกับภาษี (Invoice Information)
+ต้นฉบับ
+(Original)
+ข้อมูลลูกค้า (Customer)
+ชื่อผู้ซื้อ : บริษัท เชียงใหม่กูร์เม่ต์ จำกัด
+เลขประจำตัวผู้เสียภาษีอากร :
+0994000123456
+ที่อยู่ : 321 หมู่ 8 ถนนเชียงใหม่-ลำพูน
+ตำบลหนองหอย อำเภอเมืองเชียงใหม่
+เลขที่ใบกำกับภาษี
+: BM-2026081507
+จังหวัดเชียงใหม่ 50000
+โทรศัพท์
+: 053-333-222
+วันที่ออกใบกำกับภาษี : 15 สิงหาคม 2568
+วันที่ครบกำหนดชำระ : 29 สิงหาคม 2568
+เงื่อนไขการชำระเงิน : ชำระภายใน 14 วัน
+พนักงานขาย
+อ้างอิงใบสั่งซื้อ
+: นางสาวกมลชนก ใจดี
+: PO-CMG680815
+อีเมล
+: procurement@cmgourmet.co.th
+อ้างอิงใบเสนอราคา
+: QT-680810
+ล่าดับ
+No.
+รายการสินค้า / บริการ
+Description
+จำนวน
+หน่วย
+ราคาต่อหน่วย
+Quantity
+Unit
+(บาท)
+Unit Price (THB)
+จำนวนเงิน
+(บาท)
+Amount (THB)
+1
+เมล็ดกาแฟคั่วพิเศษ (Arabica) ขนาด 1 กก.
+50
+ถุง
+480.00
+24,000.00
+2
+ชาเขียวมัทฉะ เกรดพรีเมียม ขนาด 500 กรัม
+30
+ถุง
+620.00
+18,600.00
+3
+น้ำเชื่อมกลิ่นวานิลลา ขนาด 750 มล.
+40
+ขวด
+85.00
+3,400.00
+4
+แก้วกระดาษ รุ่น Eco Cup 16 oz (แพ็ก 50 ใบ)
+100
+แพ็ก
+120.00
+12,000.00
+5
+ค่าจัดส่งสินค้า
+1
+เที่ยว
+1,000.00
+1,000.00
+หมายเหตุ
+รวมจำนวนเงิน (ก่อนภาษีมูลค่าเพิ่ม)
+59,000.00
+ภาษีมูลค่าเพิ่ม 7%
+รวมจำนวนเงินทั้งสิ้น
+4,130.00
+63,130.00
+1. ราคานี้รวมค่าจัดส่งภายในจังหวัดเชียงใหม่
+2. สินค้ารับประกันคุณภาพตามเงื่อนไขของบริษัทฯ
+3. หากมีข้อสงสัยกรุณาติดต่อฝ่ายบริการลูกค้า โทร. 052-010-789
+4. เอกสารนี้เป็นใบกำกับภาษีเต็มรูปตามประมวลรัษฎากร
+ผู้จัดทำ / ออกใบกำกับภาษี
+In
+( นางสาวศิรินทร์ วัฒนกุล )
+เจ้าหน้าที่บัญชี
+วันที่ 15 สิงหาคม 2568
+ผู้มีอานาจลงนาม
+n
+( นายอภิวัฒน์ รัตนกุล )
+กรรมการผู้จัดการ
+วันที่ 15 สิงหาคม 2568
+(หกหมื่นสามพันหนึ่งร้อยสามสิบบาทถ้วน)
+สแกนเพื่อตรวจสอบ
+ข้อมูลใบกำกับภาษี
+ผ่านระบบ e-Tax Invoice
+ของกรมสรรพากร
+052-010-789 M info@bluemoontrading.co.th
+9 www.bluemoontrading.co.th
+SUSTAINABLE BUSINESS
+FOR A BRIGHTER TOMORROW
+"""
+
+
 
 
 def check(label, cond):
@@ -2329,6 +2464,52 @@ def main():
         extractor._is_other_field_date(
             "วันที่ออกใบกำกับภาษี", re.search("วันที่", "วันที่ออกใบกำกับภาษี")
         ) is False,
+    )
+
+    # regression: the บลูมูน invoice (see REAL_BLUEMOON_RAW_TEXT)
+    fields19 = extractor.extract_fields(REAL_BLUEMOON_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real บลูมูน OCR text fields ---")
+    for k, v in fields19.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real bluemoon: seller is the registered name, not the logo wordmark",
+        fields19["seller_name"] == "บริษัท บลูมูน เทรดดิ้ง จำกัด",
+    )
+    all_ok &= check(
+        "real bluemoon: tax id is the seller's spaced-out one, not the buyer's",
+        fields19["seller_tax_id"] == "0505512345678",
+    )
+    all_ok &= check("real bluemoon: buyer", fields19["buyer_name"] == "บริษัท เชียงใหม่กูร์เม่ต์ จำกัด")
+    all_ok &= check("real bluemoon: invoice_no", fields19["invoice_no"] == "BM-2026081507")
+    all_ok &= check("real bluemoon: date", fields19["invoice_date_iso"] == "2025-08-15")
+    all_ok &= check("real bluemoon: subtotal", fields19["subtotal"] == 59000.00)
+    all_ok &= check("real bluemoon: vat", fields19["vat"] == 4130.00)
+    all_ok &= check("real bluemoon: total", fields19["total"] == 63130.00)
+    all_ok &= check("real bluemoon: doc_type", fields19["doc_type"] == "เต็มรูป")
+
+    # the two halves of the fix, checked on their own
+    all_ok &= check(
+        "a letter-spaced taxpayer ID is read whole",
+        extractor.extract_tax_id("เลขประจำตัวผู้เสียภาษีอากร 0 5 0 5512345678")
+        == "0505512345678",
+    )
+    all_ok &= check(
+        "a labelled ID beats a loose 13-digit number printed earlier",
+        extractor.extract_tax_id(
+            "อ้างอิง 1234567890123\nเลขประจำตัวผู้เสียภาษี 0505512345678"
+        ) == "0505512345678",
+    )
+    all_ok &= check(
+        "a name broken in two is put back together, whatever the order",
+        extractor._merge_split_company_name(["เทรดดิ้ง จำกัด", "บริษัท บลูมูน"], 1)
+        == "บริษัท บลูมูน เทรดดิ้ง จำกัด",
+    )
+    all_ok &= check(
+        "a complete name is left alone",
+        extractor._merge_split_company_name(
+            ["บริษัท รจนา จำกัด", "99/1 ถนนตัวอย่าง"], 0
+        ) == "บริษัท รจนา จำกัด",
     )
 
     # multi-invoice split

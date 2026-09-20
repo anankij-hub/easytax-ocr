@@ -476,6 +476,21 @@ def has_valid_tax_id_format(tax_id):
     return len(digits) == 13
 
 
+# The taxpayer ID as its own label introduces it, on the label's own line.
+# A page carries several 13-digit numbers — the seller's ID, the buyer's,
+# sometimes an order reference — and taking whichever comes first in a
+# column-major read is a coin toss. Confirmed live: an invoice was filed
+# under 0994000123456, the CUSTOMER's ID, because the seller's own ID was
+# letter-spaced across its box ("0 5 0 5512345678") and matched no plain
+# 13-digit run at all. Hence the single optional space between digits —
+# and the run may not cross a line, or it would join two unrelated numbers
+# stacked in a column.
+TAXID_LABELLED_RE = re.compile(
+    r"(?:เลขประจำตัวผู้เสียภาษี(?:อากร)?|เลขผู้เสียภาษี|Tax\s*(?:ID|Identification))"
+    r"[^\d\n]{0,20}((?:\d[ \t\-]?){12}\d)",
+    re.IGNORECASE,
+)
+
 TAXID_LABEL_RE = re.compile(
     r"(?:เลขประจำตัวผู้เสียภาษี(?:อากร)?|เลขผู้เสียภาษี|Tax\s*(?:ID|Identification))"
     r"[^\d\n]{0,20}(\d[\d\s-]{8,18}\d)",
@@ -484,6 +499,10 @@ TAXID_LABEL_RE = re.compile(
 
 
 def extract_tax_id(text):
+    for m in TAXID_LABELLED_RE.finditer(text):
+        candidate = re.sub(r"\D", "", m.group(1))
+        if len(candidate) == 13:
+            return candidate
     for m in TAXID_RE.finditer(text):
         candidate = re.sub(r"\D", "", m.group(1))
         if len(candidate) == 13:
@@ -679,6 +698,38 @@ _SELLER_SEARCH_LINES = 20
 # still that label's value.
 _BUYER_LABEL_REACH = 2
 
+# The Thai legal form a registered name opens with. A letterhead often
+# prints the logo's wordmark ("BLUEMOON" / "TRADING CO., LTD.") above the
+# registered name, and the wordmark's second line looks enough like a
+# company to be taken for one — so a candidate carrying the Thai form wins
+# over one that doesn't. Every Thai invoice seen so far files under its
+# Thai name.
+THAI_COMPANY_FORM_RE = re.compile(r"บริษัท|ห้างหุ้นส่วน|หจก\.?|บจก\.?|บมจ\.?")
+_COMPANY_NAME_TAIL_RE = re.compile(r"จำกัด|มหาชน")
+
+
+def _merge_split_company_name(lines, i):
+    """Put a registered name back together when OCR broke it in two.
+    Confirmed live: "บริษัท บลูมูน เทรดดิ้ง จำกัด" came out as two lines in
+    the WRONG order — "เทรดดิ้ง จำกัด" then "บริษัท บลูมูน" — so the name
+    was recorded without its second half. The head is the line opening
+    with the legal form and missing the "จำกัด" that closes it; the tail is
+    the neighbour that carries it and opens with nothing."""
+    head = lines[i]
+    if not THAI_COMPANY_FORM_RE.match(head) or _COMPANY_NAME_TAIL_RE.search(head):
+        return head
+    for j in (i - 1, i + 1):
+        if not 0 <= j < len(lines):
+            continue
+        tail = lines[j].strip()
+        if (_COMPANY_NAME_TAIL_RE.search(tail)
+                and not THAI_COMPANY_FORM_RE.match(tail)
+                and not _is_latin_script(tail)
+                and not re.search(r"\d", tail)
+                and len(tail) <= 40):
+            return f"{head} {tail}"
+    return head
+
 
 def _under_buyer_label(lines, i, reach=_BUYER_LABEL_REACH):
     """True when line `i` sits directly below a bare buyer label, so the
@@ -703,6 +754,7 @@ def extract_seller_name(text):
     # swapped — because the buyer's name happened to be printed first. Such
     # a candidate is held back and used only if the page offers no other.
     deferred = {}
+    candidates = []
     for i, line in enumerate(lines[:_SELLER_SEARCH_LINES]):
         if re.search(TAXINV_MARKER, line) or re.search(RECEIPT_MARKER, line):
             continue
@@ -711,19 +763,23 @@ def extract_seller_name(text):
         if len(line) >= 5 and COMPANY_NAME_HINT_RE.search(line):
             if _under_buyer_label(lines, i):
                 deferred[i] = line
-                continue
-            # A letterhead reads "<Thai name>" then "<English name>". When
-            # the buyer box was OCR'd just above it, the Thai half can fall
-            # inside the label's reach and be held back, leaving only the
-            # English twin — which named the seller in Latin script on a
-            # page that is otherwise entirely Thai. They are the same
-            # company, so take the Thai one back.
-            twin = deferred.get(i - 1)
-            if twin and _is_latin_script(line) and not _is_latin_script(twin):
-                return twin
-            return line
+            else:
+                candidates.append(i)
+    if candidates:
+        i = next((c for c in candidates
+                  if THAI_COMPANY_FORM_RE.search(lines[c])), candidates[0])
+        # A letterhead reads "<Thai name>" then "<English name>". When the
+        # buyer box was OCR'd just above it, the Thai half can fall inside
+        # the label's reach and be held back, leaving only the English twin
+        # — which named the seller in Latin script on a page that is
+        # otherwise entirely Thai. They are the same company, so take the
+        # Thai one back.
+        twin = deferred.get(i - 1)
+        if twin and _is_latin_script(lines[i]) and not _is_latin_script(twin):
+            return twin
+        return _merge_split_company_name(lines, i)
     if deferred:
-        return deferred[min(deferred)]
+        return _merge_split_company_name(lines, min(deferred))
     # fallback: first short-ish non-marker line
     for line in lines[:8]:
         if re.search(TAXINV_MARKER, line) or re.search(RECEIPT_MARKER, line):
