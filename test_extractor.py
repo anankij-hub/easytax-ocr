@@ -2263,6 +2263,96 @@ Thank you for your business
 @BGearsite.com
 """
 
+# A second แบร์ เกียร์ invoice. Here the document box's labels DID come out
+# as a run, so the by-order fallback was never reached — and the run of
+# values behind them was cut off after its first entry, because the two
+# that follow are dates spelled out in Thai ("1 กุมภาพันธ์ 2568") and only
+# the by-order fallback knew that shape. One value against four labels
+# still paired soundly as a document number, so the invoice came through
+# with its number and no date at all.
+REAL_BEARGEAR2_RAW_TEXT = """BEAR GEAR
+IT SYSTEM
+บริษัท แบร์ เกียร์ ไอที ซิสเต็ม จำกัด
+Bear Gear IT System Co., Ltd.
+99/15 ถนนรัชดาภิเษก แขวงห้วยขวาง เขตห้วยขวาง กรุงเทพมหานคร 10310
+เลขประจำตัวผู้เสียภาษี : 0105568034567 (สำนักงานใหญ่)
+อีเมล : @BGearsite.com
+ชื่อลูกค้า / Customer บริษัท C จำกัด
+ที่อยู่ / Address
+456/89 ถนนสุขุมวิท ตำบลบางเมือง อำเภอเมืองสมุทรปราการ
+จังหวัดสมุทรปราการ 10270
+เลขประจำตัวผู้เสียภาษี 0115569345678
+อีเมล / Email
+@Ccompany.com
+ล่าดับ
+No.
+รายการสินค้า
+Description
+1
+SSD 500GB
+2
+SSD 1TB
+เลขที่/ Invoice No
+วันที่ / Date
+ครบกำหนด / Due Date
+เงื่อนไขชาระเงิน / Terms
+อ้างอิง / Reference
+01210
+1 กุมภาพันธ์ 2568
+1 มีนาคม 2568
+เครดิต 28 วัน
+REF-2568-02
+Invoice
+ใบกำกับภาษี
+ต้นฉบับ / ORIGINAL
+จำนวน
+Quantity
+หน่วย
+Unit
+ราคา/หน่วย
+Unit Price
+ราคารวม
+Amount
+1
+ชน
+2,500.00
+2,500.00
+1
+ชิ้น
+3,500.00
+3,500.00
+หมายเหตุ / Remark
+1. กรุณาตรวจสอบรายการสินค้าและจำนวนเงินให้ถูกต้องก่อนชำระเงิน
+2. หากมีข้อสงสัยเกี่ยวกับใบกำกับภาษีนี้ กรุณาติดต่อผู้ออกเอกสารตามอีเมลด้านบน
+จำนวนเงินรวมทั้งสิ้น
+Grand Total
+ราคารวม / Subtotal
+ภาษีมูลค่าเพิ่ม (7%) / VAT
+ส่วนลด / Discount
+ช่องทางการชาระเงิน / Payment
+ชื่อบัญชี
+เลขที่บัญชี
+BGear.inc
+022-222-2222
+BEAR GEAR IT SYSTEM
+ขอบคุณที่ใช้บริการ
+Thank you for your business
+คุณธนกร วัฒนกิจ
+ผู้รับสินค้า
+(Received by)
+2
+คุณอนุชา ทองดี
+ผู้มีอำนาจลงนาม
+ผู้จัดการฝ่ายขาย (Authorized Signature)
+6,000.00
+420.00
+0.00
+6,420.00
+( หกพันสี่ร้อยยี่สิบบาทถ้วน )
+@BGearsite.com
+"""
+
+
 
 
 
@@ -3597,6 +3687,35 @@ def main():
     all_ok &= check(
         "an English label word with no punctuation is stripped",
         extractor._clean_buyer_value("Customer บริษัท C จำกัด") == "บริษัท C จำกัด",
+    )
+
+    # regression: the second แบร์ เกียร์ invoice (see REAL_BEARGEAR2_RAW_TEXT)
+    fields27 = extractor.extract_fields(REAL_BEARGEAR2_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real แบร์ เกียร์ #2 OCR text fields ---")
+    for k, v in fields27.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real beargear2: date read from a value run of spelled-out Thai dates",
+        fields27["invoice_date_iso"] == "2025-02-01",
+    )
+    all_ok &= check("real beargear2: invoice_no", fields27["invoice_no"] == "01210")
+    all_ok &= check("real beargear2: buyer", fields27["buyer_name"] == "บริษัท C จำกัด")
+    all_ok &= check("real beargear2: tax id", fields27["seller_tax_id"] == "0105568034567")
+    all_ok &= check("real beargear2: subtotal", fields27["subtotal"] == 6000.00)
+    all_ok &= check("real beargear2: vat", fields27["vat"] == 420.00)
+    all_ok &= check("real beargear2: total", fields27["total"] == 6420.00)
+    all_ok &= check("real beargear2: doc_type", fields27["doc_type"] == "เต็มรูป")
+    all_ok &= check("real beargear2: nothing left to review", fields27["needs_review"] is False)
+
+    # the block extractor and the by-order fallback agree on what a value is
+    all_ok &= check(
+        "a run of labels keeps its spelled-out Thai dates",
+        extractor._extract_doc_info_block(
+            "เลขที่/ Invoice No\nวันที่ / Date\nครบกำหนด / Due Date\n"
+            "01210\n1 กุมภาพันธ์ 2568\n1 มีนาคม 2568\n"
+        ) == {"doc_no": "01210", "doc_date": "1 กุมภาพันธ์ 2568",
+              "due_date": "1 มีนาคม 2568"},
     )
 
     # multi-invoice split

@@ -1779,6 +1779,11 @@ _DOC_INFO_BLOCK_KEYS = [
 # A "value" line here is a single alphanumeric token with no spaces (a doc
 # number, a reference number, or a dd/mm/yyyy date) — deliberately narrower
 # than PURE_NUMBER_LINE_RE since these values aren't always pure digits.
+# A date spelled out in Thai is a value too, but it has spaces in it; both
+# shapes are covered by _is_doc_value_line, which is what the block
+# extractor uses. Confirmed live: a box whose values ran "01210" / "1
+# กุมภาพันธ์ 2568" / "1 มีนาคม 2568" was cut off after the first one, so the
+# invoice was filed with no date at all.
 DOC_VALUE_LINE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-/.]*$")
 
 
@@ -1867,7 +1872,7 @@ def _extract_doc_info_block(text):
         # transition from labels to values. Tolerating it as just another
         # "unclassified" skip (like a stray typo) would eat into the front
         # of the value run and shift every label/value pairing off by one.
-        while j < n and lines[j] and not DOC_VALUE_LINE_RE.match(lines[j]):
+        while j < n and lines[j] and not _is_doc_value_line(lines[j]):
             key = _classify_doc_info_label(lines[j])
             if key is not None:
                 if not labels or labels[-1] != key:
@@ -1889,11 +1894,11 @@ def _extract_doc_info_block(text):
         # ID, and a document date has to be a real date.
         k = j
         while k < n and k - j <= _DOC_INFO_MAX_GAP:
-            if not (lines[k] and DOC_VALUE_LINE_RE.match(lines[k])):
+            if not (lines[k] and _is_doc_value_line(lines[k])):
                 k += 1
                 continue
             values = []
-            while k < n and lines[k] and DOC_VALUE_LINE_RE.match(lines[k]):
+            while k < n and lines[k] and _is_doc_value_line(lines[k]):
                 values.append(lines[k])
                 k += 1
             pairing = dict(zip(labels, values))  # zip stops at the shorter
