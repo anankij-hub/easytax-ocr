@@ -134,6 +134,15 @@ VAT_KEYWORDS = [
 SUBTOTAL_KEYWORDS = [
     r"มูลค่าหลังส่วนลด", r"จำนวนเงินหลังหักส่วนลด", r"หลังหักส่วนลด",
     r"ยอดก่อนภาษี", r"มูลค่าก่อนภาษี", r"มูลค่าสินค้า", r"ราคารวมสินค้า", r"รวมราคาสินค้า",
+    # A bare "ราคารวม" is the goods total BEFORE VAT — the invoice prints
+    # it above its own "ภาษีมูลค่าเพิ่ม" and "รวมทั้งสิ้น" lines. Confirmed
+    # live: the label was recognised by nothing at all, so ยอดก่อนภาษี came
+    # back empty and ยอดรวม took the VAT figure. The same words head the
+    # last column of the items table, which is why "ราคารวม" is a column
+    # heading too — see COLUMN_HEADER_WORD_RE. The lookahead keeps it off
+    # "ราคารวมทั้งสิ้น", which is the GRAND total, the same trap "รวมเงิน"
+    # below is guarded against.
+    r"ราคารวม(?!ทั้งสิ้?น|สุทธิ)",
     # An invoice that carries both VATable and VAT-exempt goods states the
     # VATable base on its own line ("สินค้าที่เสียภาษีมูลค่าเพิ่ม") — that IS
     # the pre-tax subtotal. It has to be matched ahead of VAT_KEYWORDS,
@@ -282,7 +291,7 @@ def _clean_number(s):
 # several are ordinary words that also label real fields.
 COLUMN_HEADER_WORD_RE = re.compile(
     r"^(?:ลำดับ(?:ที่?)?|ล่าดับ(?:ที่?)?|ที่|รหัสสินค้า|รหัส|รายการ(?:สินค้า)?(?:\s*/\s*บริการ)?|รายละเอียด|"
-    r"จำนวน|จำนวนเงิน|หน่วย|ราคา(?:\s*/\s*หน่วย|ต่อหน่วย)?|ราคาสุทธิ|ส่วนลด|มูลค่า|"
+    r"จำนวน|จำนวนเงิน|หน่วย|ราคา(?:\s*/\s*หน่วย|ต่อหน่วย|รวม)?|ราคาสุทธิ|ส่วนลด|มูลค่า|"
     r"No\.?|Item|Qty|Unit|Price|Amount|Description|Discount|Total)\s*$",
     re.IGNORECASE,
 )

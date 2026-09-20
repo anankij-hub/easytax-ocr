@@ -2112,6 +2112,64 @@ Authorized Signature
 BLOOMING HAPPINESS IN EVERYDAY LIFE
 """
 
+# The สิงโต invoice from the live app. Its totals box labels the pre-VAT
+# goods total "ราคารวม" — a wording nothing recognised, so ยอดก่อนภาษี came
+# back empty; and with the two labels "ภาษีมูลค่าเพิ่ม (7%)" and "รวมทั้งสิ้น"
+# stacked ABOVE their three figures, the forward search for the total
+# stopped at the first number below it and recorded the VAT, 4,200, as the
+# grand total. The same words head the last column of the items table
+# ("จำนวน" / "ราคา/หน่วย" / "ราคารวม"), which is the reason a bare "ราคารวม"
+# was not already a keyword.
+REAL_SINGTO_RAW_TEXT = """ใบเสร็จรับเงิน/ใบกำกับภาษี
+บริษัท สิงโต จำกัด (สำนักงานใหญ่)
+23/1 ต.สุเทพ อ.เมือง จ.เชียงใหม่ 50200
+เลขประจำตัวผู้เสียภาษี 0105562123454
+ชื่อลูกค้า
+บริษัท กากา จำกัด
+ที่อยู่
+เลขผู้เสียภาษี
+123/6 ต.เชียงคาน อ.เชียงคาน จ.เลย 42110
+1234567890888
+เลขที่
+77890
+วันที่
+25/08/2025
+ล่าดับ
+รายการสินค้า
+จำนวน
+ราคา/หน่วย
+ราคารวม
+1
+ออกแบบผลิตภัณฑ์ (โลโก้งานวิ่ง)
+2
+30,000
+60,000
+หมายเหตุ
+จำนวนเงินรวมทั้งสิ้น
+การชำระเงิน
+O เงินสด
+O บัตรเดบิต/บัตรเครดิต
+O โอนผ่านบัญชี
+Downl
+(เบนจามิน ชาห์)
+วันที่
+หมายเหตุ
+ราคารวม
+60,000
+ภาษีมูลค่าเพิ่ม (7%)
+รวมทั้งสิ้น
+4,200
+64,200
+64,200
+(หกหมื่นสี่พันสองร้อยบาทถ้วน)
+อนุมัติโดย
+22
+รับชาระ
+(คิมเบอร์ลี แมค)
+วันที่
+"""
+
+
 
 
 
@@ -3344,6 +3402,50 @@ def main():
     all_ok &= check(
         "a company actually named that way is not a label",
         extractor._is_bare_buyer_label("บริษัท เวลเนส พลัส จำกัด") is False,
+    )
+
+    # regression: the สิงโต invoice (see REAL_SINGTO_RAW_TEXT)
+    fields25 = extractor.extract_fields(REAL_SINGTO_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real สิงโต OCR text fields ---")
+    for k, v in fields25.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real singto: subtotal read from the 'ราคารวม' line",
+        fields25["subtotal"] == 60000.00,
+    )
+    all_ok &= check("real singto: vat", fields25["vat"] == 4200.00)
+    all_ok &= check(
+        "real singto: total is the grand total, not the VAT figure below its label",
+        fields25["total"] == 64200.00,
+    )
+    all_ok &= check("real singto: the three amounts agree", fields25["needs_review"] is False)
+    all_ok &= check("real singto: invoice_no", fields25["invoice_no"] == "77890")
+    all_ok &= check("real singto: date", fields25["invoice_date_iso"] == "2025-08-25")
+    all_ok &= check("real singto: buyer", fields25["buyer_name"] == "บริษัท กากา จำกัด")
+    all_ok &= check("real singto: tax id", fields25["seller_tax_id"] == "0105562123454")
+    all_ok &= check("real singto: doc_type", fields25["doc_type"] == "เต็มรูป")
+
+    # the keyword and its guards, checked on their own
+    all_ok &= check(
+        "'ราคารวม' is the pre-VAT subtotal",
+        extractor._classify_totals_label("ราคารวม") == "subtotal",
+    )
+    all_ok &= check(
+        "'ราคารวมทั้งสิ้น' is still the grand total",
+        extractor._classify_totals_label("ราคารวมทั้งสิ้น") == "total",
+    )
+    all_ok &= check(
+        "the items table's own 'ราคารวม' heading is recognised as a heading",
+        extractor._is_table_column_header(
+            ["จำนวน", "ราคา/หน่วย", "ราคารวม", "1"], 2
+        ),
+    )
+    all_ok &= check(
+        "a totals line of the same name is not a heading",
+        extractor._is_table_column_header(
+            ["หมายเหตุ", "ราคารวม", "60,000"], 1
+        ) is False,
     )
 
     # multi-invoice split
