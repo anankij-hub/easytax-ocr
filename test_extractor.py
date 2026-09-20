@@ -1661,6 +1661,149 @@ BRIGHTER TOMORROW
 ใบก๋ากับภาษี
 """
 
+# The โคราชเทค invoice from the live app. Its totals box has six rows, and
+# OCR emitted them in three pieces: five labels ("หัก ส่วนลดรวม" ...
+# "รวมมูลค่าทั้งสิ้น"), then the last row of the ITEMS table dropped in the
+# middle ("V", "5", "กล่อง", "90.00", "0.00", "450.00"), then the sixth
+# label ("สินค้าก่อนหักส่วนลด"), then all six figures together. No label run
+# ever reached its own values — the run of five ran straight into the item
+# row's "5" and paired against it — so all three amounts fell through to a
+# keyword search, which returned an item line number (1), the seller's
+# postcode (30,000) and another line number (5).
+REAL_KORATTECH_RAW_TEXT = """T
+บริษัท โคราชเทค อินโนเวชั่น จำกัด (สำนักงานใหญ่)
+KORATTECH INNOVATION CO., LTD. (Head Office)
+129/45 ถนนราชสีมา-ปีกธงชัย ตำบลหนองจะบก อำเภอเมืองนครราชสีมา จังหวัดนครราชสีมา 30000
+129/45 Ratchasima-Pak Thong Chai Road, Nong Chabok Subdistrict,
+KoratTech Mueang Nakhon Ratchasima District, Nakhon Ratchasima 30000
+Innovation Co., Ltd.
+OFFICE FURNITURE SOLUTIONS
+FOR A BETTER WORKSPACE
+เลขประจำตัวผู้เสียภาษีอากร / Tax ID
+0105569018274
+นามผู้ซื้อ / Name
+บริษัท เอสพี เคมิคอล จำกัด
+ที่อยู่ / Address
+Ins. 044-xxx-xxxx
+Email: info@korattech.co.th
+เลขประจำตัวผู้เสียภาษีอากร 0105569018274
+88/9 หมู่ที่ 4 ถนนมิตรภาพ ตำบลในเมือง
+อ๋าเภอเมืองขอนแก่น จังหวัดขอนแก่น 40000
+เลขประจำตัวผู้เสียภาษีอากร / Tax ID
+0405567001234
+รายการ
+Website: www.korattech.co.th
+ใบเสร็จรับเงิน / ใบกำกับภาษี
+RECEIPT / TAX INVOICE
+ต้นฉบับสำหรับลูกค้า / Original
+เลขที่ / NO.
+วันที่ / DATE
+เครดิต / CREDIT
+INV-6809045
+09/09/2568
+30 วัน
+วันครบกำหนด / DUE DATE 09/10/2568
+เลขที่ใบสั่งซื้อ / PO.NO
+พนักงานขาย / SALEMAN
+รหัสลูกค้า / CUSTOMER
+ราคาต่อหน่วย
+เฟอร์นิเจอร์สำนักงาน
+ที่ตอบโจทย์ทุกพื้นที่ทำงาน
+"Smart Workspace
+PO-20250901
+Better Tomorrow "
+นายธนกฤต ศรีวัฒนา
+CUS-0123
+หน้าที่ 1/1
+ลำดับที่
+จำนวน
+หน่วยนับ
+ส่วนลดต่อหน่วย
+V/N*
+ITEM
+DESCRIPTION
+QUANTITY
+UNIT
+UNIT PRICE
+DISCOUNT
+จำนวนเงินบาท
+AMOUNT (BAHT)
+1
+โต๊ะทำงาน ขนาด 120 cm.
+V
+2
+ตัว
+2,800.00
+0.00
+5,600.00
+(Office Desk)
+2
+เก้าอี้สำนักงาน รุ่น Ergo
+V
+4
+ตัว
+980.00
+50.00
+3,720.00
+(Office Chair)
+3
+ตู้เอกสาร 2 บานเปิด
+V
+1
+2,500.00
+0.00
+2,500.00
+(Storage Cabinet)
+4
+ชั้นวางแฟ้ม 3 ชั้น
+V
+1
+ตัว
+650.00
+0.00
+650.00
+(File Shelf)
+5
+กล่องเก็บเอกสารพลาสติก
+(Document Box)
+หมายเหตุ * (V = สินค้าทำบารมีอมูลสินค้า /
+N = สินค้าไม่กำหนดแต้มส่งเสริมการขาย)
+1. สินค้ารับประกัน 1 ปี (ยกเว้นสินค้าที่สึกหรือง)
+2. ราคาที่รวมภาษีมูลค่าเพิ่ม
+หัก ส่วนลดรวม
+มูลค่าสินค้าหลังหักส่วนลด
+ภาษีมูลค่าเพิ่ม (VAT 7%)
+หัก เงินมัดจำ
+รวมมูลค่าทั้งสิ้น
+V
+5
+กล่อง
+90.00
+0.00
+450.00
+สินค้าก่อนหักส่วนลด
+12,430.00
+200.00
+12,230.00
+856.10
+0.00
+13,086.10
+จำนวนเงินรวม (ตัวอักษร)
+GRAND TOTAL (ALPHABET)
+หนึ่งหมื่นสามพันแปดสิบหกบาทสิบสตางค์
+- สินค้าบริการในใบกำกับภาษีนี้ ได้รับชำระเงินและส่งมอบเรียบร้อยแล้ว
+- โปรดตรวจสอบรายการสินค้า หากมีข้อผิดพลาดกรุณาแจ้งภายใน 7 วัน
+- บริษัทฯ ขอสงวนสิทธิ์ในการเปลี่ยนคืนสินค้าเฉพาะกรณีสินค้ามีตำหนิจากการผลิต
+- ใบกำกับภาษีนี้เป็นหลักฐานทางภาษี โปรดเก็บรักษาไว้
+- ขอบคุณที่ไว้วางใจใช้บริการ
+บริษัท โคราชเทค อินโนเวชั่น จำกัด
+Muk
+(นางสาวกมลชนก วิริยะกุล)
+ผู้มีอำนาจลงนาม
+AUTHORIZED SIGNATURE
+"""
+
+
 
 
 
@@ -2685,6 +2828,55 @@ def main():
             "ชื่อผู้ซื้อ : บริษัท ผู้ซื้อ จำกัด\nเลขประจำตัวผู้เสียภาษี 0994000123456\n"
             "บริษัท ผู้ขาย จำกัด\nเลขประจำตัวผู้เสียภาษี 0505512345678\n"
         ) == "0505512345678",
+    )
+
+    # regression: the โคราชเทค invoice (see REAL_KORATTECH_RAW_TEXT)
+    fields21 = extractor.extract_fields(REAL_KORATTECH_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real โคราชเทค OCR text fields ---")
+    for k, v in fields21.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real korattech: subtotal is the figure after discount, not an item number",
+        fields21["subtotal"] == 12230.00,
+    )
+    all_ok &= check("real korattech: vat (not the postcode 30000)", fields21["vat"] == 856.10)
+    all_ok &= check("real korattech: total", fields21["total"] == 13086.10)
+    all_ok &= check("real korattech: the three amounts agree", fields21["needs_review"] is False)
+    all_ok &= check("real korattech: invoice_no", fields21["invoice_no"] == "INV-6809045")
+    all_ok &= check("real korattech: date", fields21["invoice_date_iso"] == "2025-09-09")
+    all_ok &= check("real korattech: buyer", fields21["buyer_name"] == "บริษัท เอสพี เคมิคอล จำกัด")
+    all_ok &= check("real korattech: tax id", fields21["seller_tax_id"] == "0105569018274")
+
+    # the arithmetic scan, checked on its own
+    all_ok &= check(
+        "the one balanced triple in a run of figures is found",
+        extractor._balanced_triple([12430.0, 200.0, 12230.0, 856.10, 13086.10])
+        == (12230.0, 856.10, 13086.10),
+    )
+    all_ok &= check(
+        "a run that balances two different ways is rejected as ambiguous",
+        extractor._balanced_triple(
+            [100.0, 7.0, 107.0, 200.0, 14.0, 214.0]
+        ) is None,
+    )
+    all_ok &= check(
+        "a run where nothing balances yields nothing",
+        extractor._balanced_triple([1.0, 30000.0, 5.0, 450.0]) is None,
+    )
+    # the guard: a figure read from its own label is never second-guessed,
+    # so an invoice whose printed amounts really do disagree stays flagged
+    mismatched = extractor.extract_fields(
+        "บริษัท ทดสอบ จำกัด\nเลขประจำตัวผู้เสียภาษี 0105567123469\n"
+        "ใบกำกับภาษี\nชื่อลูกค้า : บริษัท เอ จำกัด\n"
+        "เลขที่ใบกำกับภาษี IV6800107-054\nวันที่ 07/01/68\n"
+        "ราคารวมสินค้า (บาท) 1,900.00\nภาษีมูลค่าเพิ่ม (VAT) 7% 140.00\n"
+        "รวมทั้งสิ้น 2,040.00\n",
+        ocr_confidence=92.0,
+    )
+    all_ok &= check(
+        "printed amounts that disagree are still flagged, not rewritten",
+        mismatched["needs_review"] is True and mismatched["vat"] == 140.00,
     )
 
     # multi-invoice split

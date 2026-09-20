@@ -1513,6 +1513,64 @@ def _extract_totals_block(text):
     return {}
 
 
+_ARITH_SCAN_MIN_RUN = 3
+
+
+def _totals_from_number_run(text):
+    """Find the three amounts by arithmetic alone, ignoring every label.
+
+    Last resort for a totals box OCR interleaved beyond repair. Confirmed
+    live: an invoice emitted five of its six totals labels, then wandered
+    back into the last row of the items table ("V", "5", "กล่อง", "90.00",
+    "0.00", "450.00"), then the sixth label, then all six figures — so no
+    label run ever met its own values and every field fell through to a
+    keyword search that picked up an item number and a postcode.
+
+    The figures survive that intact, though: they are still a column of
+    consecutive numbers, and within it exactly one triple satisfies BOTH
+    of the invoice's arithmetic invariants at once — VAT is 7% of the
+    subtotal, and the two add up to the total. Two simultaneous equations
+    over a handful of numbers is a far stronger claim than any position,
+    which is why this is allowed to override a reading nothing else
+    agreed with. Where a page offers several, the largest total wins — a
+    per-section subtotal can also balance, the grand total is the bigger.
+    """
+    lines = [l.strip() for l in text.splitlines()]
+    best = None
+    run = []
+    for line in lines + [""]:
+        if line and PURE_NUMBER_LINE_RE.match(line):
+            val = _clean_number(line)
+            if val is not None:
+                run.append(val)
+                continue
+        if len(run) >= _ARITH_SCAN_MIN_RUN:
+            found = _balanced_triple(run)
+            if found and (best is None or found[2] > best[2]):
+                best = found
+        run = []
+    return best
+
+
+def _balanced_triple(values):
+    """The one (subtotal, vat, total) among `values` that satisfies both
+    invariants, or None. Returns None when several do — an ambiguous run
+    is no better evidence than no run at all."""
+    seen = []
+    for v in values:
+        if v > 0 and not any(abs(v - o) < 0.005 for o in seen):
+            seen.append(v)
+    hits = []
+    for subtotal in seen:
+        for vat in seen:
+            if not _vat_rate_ok(subtotal, vat):
+                continue
+            for total in seen:
+                if _amounts_balance(subtotal, vat, total):
+                    hits.append((subtotal, vat, total))
+    return hits[0] if len(hits) == 1 else None
+
+
 def _pair_totals(labels, values):
     result = {}
     for key, val in zip(labels, values):
@@ -1690,6 +1748,22 @@ def extract_fields(text, ocr_confidence=None):
     # keyword search — cross-check them against each other before they get
     # recorded. See reconcile_totals.
     subtotal, vat, total = reconcile_totals(subtotal, vat, total)
+
+    # Nothing in the totals box could be paired with its label AND what the
+    # keyword searches came back with doesn't hang together — the reading
+    # is worthless either way. Only here, with nothing to lose, is the
+    # arithmetic scan allowed to speak: see _totals_from_number_run. A
+    # figure that WAS paired with its own label is never second-guessed,
+    # so an invoice whose printed amounts genuinely disagree still gets
+    # flagged for review rather than quietly rewritten.
+    if not totals_block and not (
+        subtotal and vat and total
+        and _amounts_balance(subtotal, vat, total)
+        and _vat_rate_ok(subtotal, vat)
+    ):
+        scanned = _totals_from_number_run(text)
+        if scanned:
+            subtotal, vat, total = scanned
 
     fields = {
         "invoice_no": invoice_no,
