@@ -1534,6 +1534,134 @@ SUSTAINABLE BUSINESS
 FOR A BRIGHTER TOMORROW
 """
 
+# The กรีนฟิลด์ ซัพพลาย invoice from the live app. The page labels two
+# taxpayer IDs, and OCR damaged exactly one of them: the seller's label
+# came out "เลขประจำตัวผู้เสียกษีอากร" — the ภา of ภาษี dropped — while the
+# customer's "เลขประจำตัวผู้เสียภาษีอากร :" survived intact. The only label
+# that matched was therefore the buyer's, and the invoice was filed under
+# the customer's ID. Both IDs are also letter-spaced across their boxes
+# ("0 5 0 5 5 1 2 3 4 5 6 7 8").
+REAL_GREENFIELD_SUPPLY_RAW_TEXT = """บริษัท กรีนฟิลด์ ซัพพลาย จำกัด
+GREENFIELD SUPPLY CO., LTD.
+456 หมู่ 7 ถนนซูปเปอร์ไฮเวย์ ตำบลหนองควาย
+อ้าเภอหางดง จังหวัดเชียงใหม่ 50230
+โทร. 053-888-123 แฟกซ์ 053-888-124
+GREENFIELD อีเมล: sales@greenfieldsupply.co.th
+SUPPLY CO., LTD.
+CLEAN ENERGY FOR A BETTER TOMORROW
+เว็บไชต์: www.greenfieldsupply.co.th
+เลขประจำตัวผู้เสียกษีอากร 0 5 0 5 5 1 2 3 4 5 6 7 8
+(สำนักงาบใหญ)
+ใบกำกับภาษีเต็มรูป
+TAX INVOICE
+SUSTAINABLE
+PRODUCTS
+SUSTAINABLE
+LIVING
+"ร่วมสร้าง
+สิ่งแวดล้อมที่ดีกว่า
+ให้กับอนาคต"
+ต้นฉบับ
+(Original)
+ข้อมูลลูกค้า (Customer)
+ชื่อผู้ซื้อ : บริษัท เชียงใหม่ เบเกอรี่ แอนด์ คาเฟ่ จำกัด
+เลขประจำตัวผู้เสียภาษีอากร : 050554 7 8 9 0 1 2 3
+ที่อยู่
+: 99 หมู่ 1 ถนนนิมมานเหมินทร์ ตำบลสุเทพ
+อำเภอเมืองเชียงใหม่ จังหวัดเชียงใหม่ 50200
+โทรศัพท์ : 053-242-567
+ข้อมูลใบกำกับภาษี (Invoice Information)
+เลขที่ใบกำกับภาษี : GF-2026081501
+วันที่ออกใบกำกับภาษี : 15 สิงหาคม 2568
+วันที่ครบกำหนดชำระ : 29 สิงหาคม 2568
+เงื่อนไขการชำระเงิน - ชำระภายใน 14 วัน
+: นางสาวกมลวรรณ ใจดี
+อีเมล
+: accounting@cmbakery.co.th
+พนักงานขาย
+อ้างอิงใบสั่งซื้อ
+อ้างอิงใบเสนอราคา
+: PO-CMB250815
+: QU-20250810
+ล่าดับ
+No.
+รายการสินค้า / บริการ
+Description
+จำนวน
+หน่วย
+Quantity
+Unit
+ราคาต่อหน่วย
+(บาท)
+Unit Price (THB)
+จำนวนเงิน
+(บาท)
+Amount (THB)
+1
+เมล็ดกาแฟอาราบิก้า คั่วกลาง (1 กก.)
+20
+2
+ถุงบรรจุภัณฑ์ ขีปล็อก ขนาด 250 กรัม
+500
+3 กล่องกระดาษรักษ์โลก ขนาด M
+200
+22 2
+ถุง
+950.00
+19,000.00
+ใบ
+6.50
+3,250.00
+12.00
+2,400.00
+4 สติ๊กเกอร์โลโก้ (พิมพ์ 4 สี)
+1,000
+ดวง
+1.20
+1,200.00
+5 ค่าจัดส่งสินค้า
+1
+เที่ยว
+1,500.00
+1,500.00
+หมายเหตุ
+1. ราคานี้รวมค่าจัดส่งภายในจังหวัดเชียงใหม่
+2. สินค้ารับประกันคุณภาพตามเงื่อนไขของบริษัทฯ
+3. หากมีข้อสงสัยกรุณาติดต่อฝ่าขยาย โทร. 053-888-123
+4. เอกสารนี้เป็นใบกำกับภาษีเต็มรูปตามประมวลรัษฎากร
+KE
+ข้อมูลการชำระเงิน (Bank Information)
+ธนาคารกสิกรไทย จำกัด (มหาชน)
+สาขาเชียงใหม่
+ชื่อบัญชี บริษัท กรีนฟิลด์ ซัพพลาย จำกัด
+เลขที่บัญชี 123-8-45678-9
+ประเภทบัญชี กระแสรายวัน
+(สองหมื่นเก้าพันสองร้อยหกสิบสี่บาทห้าสิบสตางค์)
+ผู้จัดทำ / ออกใบกำกับภาษี
+(ph
+( นางสาวศิริพร มานะกุล)
+เจ้าหน้าที่บัญชี
+วันที่ 15 สิงหาคม 2568
+ผู้มีอำนาจลงนาม
+Ime
+(นายธนวัฒน์ ประเสริฐกุล )
+กรรมการผู้จัดการ
+วันที่ 15 สิงหาคม 2568
+รวมจำนวนเงิน (ก่อนภาษีมูลค่าเพิ่ม)
+27,350.00
+ภาษีมูลค่าเพิ่ม 7%
+รวมจำนวนเงินทั้งสิ้น
+1,914.50
+29,264.50
+053-888-123 X sales@greenfieldsupply.co.th
+GOOD PRODUCTS
+www.greenfieldsupply.co.th
+BRIGHTER TOMORROW
+สแกนเพื่อตรวจสอบ
+ใบก๋ากับภาษี
+"""
+
+
 
 
 
@@ -2510,6 +2638,53 @@ def main():
         extractor._merge_split_company_name(
             ["บริษัท รจนา จำกัด", "99/1 ถนนตัวอย่าง"], 0
         ) == "บริษัท รจนา จำกัด",
+    )
+
+    # regression: the กรีนฟิลด์ ซัพพลาย invoice (see
+    # REAL_GREENFIELD_SUPPLY_RAW_TEXT)
+    fields20 = extractor.extract_fields(REAL_GREENFIELD_SUPPLY_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real กรีนฟิลด์ ซัพพลาย OCR text fields ---")
+    for k, v in fields20.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real greenfield supply: tax id is the issuer's, not the customer's",
+        fields20["seller_tax_id"] == "0505512345678",
+    )
+    all_ok &= check(
+        "real greenfield supply: seller",
+        fields20["seller_name"] == "บริษัท กรีนฟิลด์ ซัพพลาย จำกัด",
+    )
+    all_ok &= check(
+        "real greenfield supply: buyer",
+        fields20["buyer_name"] == "บริษัท เชียงใหม่ เบเกอรี่ แอนด์ คาเฟ่ จำกัด",
+    )
+    all_ok &= check("real greenfield supply: invoice_no", fields20["invoice_no"] == "GF-2026081501")
+    all_ok &= check("real greenfield supply: date", fields20["invoice_date_iso"] == "2025-08-15")
+    all_ok &= check("real greenfield supply: subtotal", fields20["subtotal"] == 27350.00)
+    all_ok &= check("real greenfield supply: vat", fields20["vat"] == 1914.50)
+    all_ok &= check("real greenfield supply: total", fields20["total"] == 29264.50)
+    all_ok &= check("real greenfield supply: doc_type", fields20["doc_type"] == "เต็มรูป")
+
+    # the two halves of the fix, checked on their own
+    all_ok &= check(
+        "a taxpayer-ID label survives OCR dropping a syllable",
+        extractor.extract_tax_id("เลขประจำตัวผู้เสียกษีอากร 0 5 0 5 5 1 2 3 4 5 6 7 8")
+        == "0505512345678",
+    )
+    all_ok &= check(
+        "the ID inside the customer box loses to the issuer's",
+        extractor.extract_tax_id(
+            "บริษัท ผู้ขาย จำกัด\nเลขประจำตัวผู้เสียภาษี 0505512345678\n"
+            "ชื่อผู้ซื้อ : บริษัท ผู้ซื้อ จำกัด\nเลขประจำตัวผู้เสียภาษี 0994000123456\n"
+        ) == "0505512345678",
+    )
+    all_ok &= check(
+        "...even when the customer box is read out first",
+        extractor.extract_tax_id(
+            "ชื่อผู้ซื้อ : บริษัท ผู้ซื้อ จำกัด\nเลขประจำตัวผู้เสียภาษี 0994000123456\n"
+            "บริษัท ผู้ขาย จำกัด\nเลขประจำตัวผู้เสียภาษี 0505512345678\n"
+        ) == "0505512345678",
     )
 
     # multi-invoice split

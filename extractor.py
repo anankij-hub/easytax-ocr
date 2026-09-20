@@ -485,24 +485,65 @@ def has_valid_tax_id_format(tax_id):
 # 13-digit run at all. Hence the single optional space between digits —
 # and the run may not cross a line, or it would join two unrelated numbers
 # stacked in a column.
+# The anchor stops at "ผู้เสีย" and lets the gap swallow whatever OCR made
+# of "ภาษีอากร". Confirmed live: an invoice printed
+# "เลขประจำตัวผู้เสียกษีอากร" — the ภา of ภาษี simply dropped — so the
+# seller's label matched nothing and the only ID the page yielded was the
+# CUSTOMER's, from the one label that survived intact.
+_TAXID_LABEL_CORE = (
+    r"(?:เลขประจำตัวผู้เสีย|เลขผู้เสีย|Tax\s*(?:ID|Identification))"
+)
+
 TAXID_LABELLED_RE = re.compile(
-    r"(?:เลขประจำตัวผู้เสียภาษี(?:อากร)?|เลขผู้เสียภาษี|Tax\s*(?:ID|Identification))"
-    r"[^\d\n]{0,20}((?:\d[ \t\-]?){12}\d)",
+    _TAXID_LABEL_CORE + r"[^\d\n]{0,20}((?:\d[ \t\-]?){12}\d)",
     re.IGNORECASE,
 )
 
+# How far above its own line a taxpayer ID is still inside the customer
+# box. "ชื่อผู้ซื้อ : ..." sits directly above the buyer's ID; the box
+# heading "ข้อมูลลูกค้า (Customer)" a line or two further up.
+_BUYER_BLOCK_REACH = 3
+
+
+def _in_buyer_block(lines, i, reach=_BUYER_BLOCK_REACH):
+    """True when line `i` is printed inside the customer box, so whatever
+    it carries describes the BUYER rather than the issuer.
+
+    Scanned upward from the line itself and stopped by another party's
+    name — once the letterhead's "บริษัท ... จำกัด" is reached, the customer
+    box is behind us and a buyer label further up belongs to it, not to
+    line `i`."""
+    for j in range(i, max(-1, i - reach - 1), -1):
+        line = lines[j]
+        if any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS):
+            return True
+        if j != i and COMPANY_NAME_HINT_RE.search(line):
+            return False
+    return False
+
 TAXID_LABEL_RE = re.compile(
-    r"(?:เลขประจำตัวผู้เสียภาษี(?:อากร)?|เลขผู้เสียภาษี|Tax\s*(?:ID|Identification))"
-    r"[^\d\n]{0,20}(\d[\d\s-]{8,18}\d)",
+    _TAXID_LABEL_CORE + r"[^\d\n]{0,20}(\d[\d\s-]{8,18}\d)",
     re.IGNORECASE,
 )
 
 
 def extract_tax_id(text):
+    # A page labels two taxpayer IDs — the issuer's and the customer's —
+    # and which one OCR reads out first is a matter of layout. Take the
+    # labelled ID that is NOT printed inside the customer box; fall back
+    # to the first one only if every match is (a column-major read can put
+    # the customer box above the letterhead).
+    lines = text.splitlines()
+    labelled = []
     for m in TAXID_LABELLED_RE.finditer(text):
         candidate = re.sub(r"\D", "", m.group(1))
         if len(candidate) == 13:
+            labelled.append((text.count("\n", 0, m.start()), candidate))
+    for idx, candidate in labelled:
+        if not _in_buyer_block(lines, idx):
             return candidate
+    if labelled:
+        return labelled[0][1]
     for m in TAXID_RE.finditer(text):
         candidate = re.sub(r"\D", "", m.group(1))
         if len(candidate) == 13:
