@@ -515,6 +515,13 @@ def _in_buyer_block(lines, i, reach=_BUYER_BLOCK_REACH):
     line `i`."""
     for j in range(i, max(-1, i - reach - 1), -1):
         line = lines[j]
+        # The copy designation names the customer without being the
+        # customer's box: "ต้นฉบับสำหรับลูกค้า / Original" says which copy
+        # this is. Confirmed live: OCR mangled it to "นพัน ลูกค้า/Original",
+        # the surviving "ลูกค้า" put the SELLER's taxpayer ID inside the
+        # customer box, and the invoice was filed under the buyer's ID.
+        if j != i and DOC_FURNITURE_RE.search(line):
+            continue
         if any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS):
             return True
         if j != i and COMPANY_NAME_HINT_RE.search(line):
@@ -749,6 +756,16 @@ THAI_COMPANY_FORM_RE = re.compile(r"บริษัท|ห้างหุ้น�
 _COMPANY_NAME_TAIL_RE = re.compile(r"จำกัด|มหาชน")
 
 
+def _trim_unclosed_paren(name):
+    """Cut a trailing "(" that never closes. A letterhead wraps its branch
+    marker onto the next line, and OCR keeps the halves apart: confirmed
+    live, a seller was recorded as "บริษัท ... จำกัด (สานักงาน" with "ใหญ่)"
+    left on the line below. The registered name is complete without it."""
+    if name.count("(") > name.count(")"):
+        return name[:name.rindex("(")].strip()
+    return name
+
+
 def _merge_split_company_name(lines, i):
     """Put a registered name back together when OCR broke it in two.
     Confirmed live: "บริษัท บลูมูน เทรดดิ้ง จำกัด" came out as two lines in
@@ -817,10 +834,10 @@ def extract_seller_name(text):
         # Thai one back.
         twin = deferred.get(i - 1)
         if twin and _is_latin_script(lines[i]) and not _is_latin_script(twin):
-            return twin
-        return _merge_split_company_name(lines, i)
+            return _trim_unclosed_paren(twin)
+        return _trim_unclosed_paren(_merge_split_company_name(lines, i))
     if deferred:
-        return _merge_split_company_name(lines, min(deferred))
+        return _trim_unclosed_paren(_merge_split_company_name(lines, min(deferred)))
     # fallback: first short-ish non-marker line
     for line in lines[:8]:
         if re.search(TAXINV_MARKER, line) or re.search(RECEIPT_MARKER, line):
@@ -952,6 +969,14 @@ def _clean_buyer_value(val):
     # consumes the Thai half, leaving "/Customer Name : " glued to the front
     # of the name — drop a leading run of Latin label words up to its colon.
     val = re.sub(r"^[/|\-–]?\s*[A-Za-z][A-Za-z.\s]{0,30}[:：]\s*", "", val).strip()
+    # A label OCR mangled past recognition still behaves like one: short,
+    # in front of a separator, naming no company. Confirmed live:
+    # "นามผู้ซื้อ / Name :" came out "นามสื่อ / Name :", matched none of the
+    # patterns above, and the entire line — label included — was recorded
+    # as the buyer's name.
+    m = re.match(r"^([^:：]{0,40})[:：]\s*(\S.*)$", val)
+    if m and not COMPANY_NAME_HINT_RE.search(m.group(1)) and len(m.group(2)) >= 3:
+        val = m.group(2).strip()
     m = OTHER_FIELD_LABEL_RE.search(val)
     if m and m.start() > 0:
         val = val[:m.start()]
@@ -1695,6 +1720,12 @@ def _doc_info_pairing_is_sound(pairing):
         return False  # a bare long number is a taxpayer ID, not a doc no.
     if _parse_thai_date(doc_no):
         return False  # a date landed in the number's slot: misaligned by one
+    if not re.search(r"\d", doc_no):
+        # Every document number carries a digit. A bare word means the
+        # scan ran past the values — which are printed ": INV-6809-042",
+        # behind a colon — and reached the items table's heading, which is
+        # how an invoice came to be filed under the number "ITEM".
+        return False
     doc_date = pairing.get("doc_date")
     if doc_date is not None and _parse_thai_date(doc_date) is None:
         return False

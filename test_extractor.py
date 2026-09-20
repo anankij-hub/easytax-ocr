@@ -1803,6 +1803,126 @@ Muk
 AUTHORIZED SIGNATURE
 """
 
+# The ขอนแก่น โปรออฟฟิศ invoice from the live app — a badly degraded scan
+# that broke four fields at once, each a different way.
+# (1) The letterhead wrapped its branch marker onto the next line, so the
+#     seller came out "บริษัท ... จำกัด (สานักงาน" with "ใหญ่)" stranded below.
+# (2) The copy designation "ต้นฉบับสำหรับลูกค้า / Original" was read as
+#     "นพัน ลูกค้า/Original" — enough of "ลูกค้า" survived to make the line
+#     above the SELLER's taxpayer ID look like a customer box, so that ID
+#     was skipped and the buyer's was filed as the issuer's.
+# (3) The document box prints its values behind a colon (": INV-6809-042"),
+#     which no value pattern matched, so the scan ran on to the items
+#     table and filed the invoice under the number "ITEM".
+# (4) The buyer label "นามผู้ซื้อ / Name :" came out "นามสื่อ / Name :" and
+#     matched nothing, so the whole line went into the ชื่อผู้ซื้อ box.
+REAL_KHONKAEN_RAW_TEXT = """KPO
+SUPPLY
+บริษัท ขอนแก่น โปรออฟฟิศ ซัพพลาย จำกัด (สานักงาน
+ใหญ่)
+KHONKAEN PROOFFICE SUPPLY CO., LTD. (Head Office)
+128/36 อนแ ลบภาพ ท่าน ในวิอร อ่าเกรเêereeukrit en esอนแก่น 40000
+128/36 Mittraphap Road, Nai Mueang, Mueang Khon Kaen, Khon Khen 40000
+โทร. 023-221-569 Email: contact@kkprooffice.co.th Website: www.kkprooffice.co.th
+ใบเสร็จรับเงิน/ใบก่ากับภาษี
+RECEIPT / TAX INVOICE
+นพัน ลูกค้า/Original
+เลขประจำตัวผู้เสียภาษีอากร / Tax ID : 0105568123476
+นามสื่อ / Name : บริษัท อิสาน พัฒนาการค้า จำกัด (สำนักงานใหญ่)
+ที่อยู่ / Address : 88/12 นิตรภาพ ตำบลศิลา อำเภอเมืองขอนแก่น จังหวัดขอนแก่น
+40000
+เลขประจำตัวผู้เสียภาษีอากร / Tax ID : 0405561009871
+ดุน งามเห่อเอานักงาน
+uarq กรณ์ทำความสะอาดหงบ
+325
+Quality Office Furniture &
+Cleaning Supplies Solutions
+หน้า 1/1
+เลขที่ / NO.
+: INV-6809-042
+วันที / DATE
+เครติด / CREDIT
+: 18/09/2568
+: 30 วัน
+ล่าสันหี
+ITEM
+รายการ
+DESCRIPTION
+1 หาอีสานักรานหนักหินสูง Ergonomic (รุ่น Pro-Desk)
+2
+3
+4
+โต๊ะทำงานอเนกประสงค์ 120 ซม. (ลายไม้แอช)
+น้ำยาถูพื้นทำความสะอาดขจัดคราบ Heavy Duty 5 ลิตร
+ชุดไม้ถูพื้นไมโครไฟเบอร์พร้อมถังปั่นสแตนเลส
+หมายเหตุ * (V = สินค้าผ่านภาษีมูลค่าเพิ่ม / N = สินค้าไม่คิดภาษีมูลค่าเพิ่ม)
+1. สินค้ารับประทับสุภาพ 1 ปี (ยกเว้นอุปกรณ์สนเปลือง)
+2. ราคารวมภาษีมูลค่าเห็นเรียบร้อยแล้ว
+3. กรุณาอวสอบราชการสินค้า และจำนวนห้า หกต้อง
+วันครบก้าหนด / DUE
+: 18/10/2568
+DATE
+เลข ในลอสื่อ / PO.NO : PO-2025-089
+พนักงานขาย/
+SALESMAN
+รหัสลูกค้า/
+CUSTOMER
+:นายสมชาย ใx
+:CUS-KK-0142
+V/N°
+จำนวน
+QUANTITY
+หน่วงนับราคาส่งหน่วย
+จำนวนเงินบาท
+UNIT
+UNIT PRICE
+AMOUNT (BAHT)
+< < < <
+V
+2
+ตัว
+2,850.00
+5,700.00
+V
+ตัว
+2,200.00
+2,200.00
+V
+2
+แกลลอน
+380.00
+760.00
+V
+ชุด
+690.00
+690.00
+รวมหิน / Subtotal
+หัก ส่วนออทิเce / Discount
+จำนวนเงินหลังหักส่วนลด
+กาอิมูลค่าเพิ่ม / VAT 7%
+หัก พินมัดจำ / Deposit
+เก้าพันสามร้อยฟังลั่น / Grand Total
+9,350.00
+612.15
+8,737.55
+611.65
+0.00
+9,349.50
+.
+จำนวนเงินราม (ผ้าอักษร) :
+- สินค้าตามบริการใบกำกับภาษีนี้ ได้รับชำระเงินและส่งมอบเรียบร้อยแล้ว
+- โบ่รอดราวสอบราชการลินค้า หากมีข้อผิดหลายกรุณาะลังกา ใน 7 วัน
+- บอย ซอสงวนสิทธิ์ในการเปลื่อน /ดินดินผ้าลายเรือน สินค้าที่ทำหนด
+ใบกำกับการ เป็นหลักฐานลายภาษี โปรเก็บรักษาไว้
+ชอบอุณห า ส บ การ
+เก้าพันสามร้อยสี่สิบเค้าบาทห้าสิบสตางค์
+บริษัท ขอนแก่น โย่vaอหหิต พพลาย จำกัด
+(นางสาว คายา กระ ยากุล)
+อ่านโนลงนาม
+AUTHORIZED SIONATURE
+"""
+
+
 
 
 
@@ -2877,6 +2997,66 @@ def main():
     all_ok &= check(
         "printed amounts that disagree are still flagged, not rewritten",
         mismatched["needs_review"] is True and mismatched["vat"] == 140.00,
+    )
+
+    # regression: the ขอนแก่น โปรออฟฟิศ invoice (see REAL_KHONKAEN_RAW_TEXT)
+    fields22 = extractor.extract_fields(REAL_KHONKAEN_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real ขอนแก่น โปรออฟฟิศ OCR text fields ---")
+    for k, v in fields22.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real khonkaen: seller name drops the parenthesis OCR never closed",
+        fields22["seller_name"] == "บริษัท ขอนแก่น โปรออฟฟิศ ซัพพลาย จำกัด",
+    )
+    all_ok &= check(
+        "real khonkaen: tax id is the issuer's, not the buyer's",
+        fields22["seller_tax_id"] == "0105568123476",
+    )
+    all_ok &= check(
+        "real khonkaen: invoice_no is the number, not the table heading 'ITEM'",
+        fields22["invoice_no"] == "INV-6809-042",
+    )
+    all_ok &= check(
+        "real khonkaen: buyer name has its mangled label stripped",
+        fields22["buyer_name"] == "บริษัท อิสาน พัฒนาการค้า จำกัด (สำนักงานใหญ่)",
+    )
+    all_ok &= check("real khonkaen: date", fields22["invoice_date_iso"] == "2025-09-18")
+    all_ok &= check("real khonkaen: subtotal", fields22["subtotal"] == 8737.55)
+    all_ok &= check("real khonkaen: vat", fields22["vat"] == 611.65)
+    all_ok &= check("real khonkaen: total", fields22["total"] == 9349.50)
+    all_ok &= check("real khonkaen: doc_type", fields22["doc_type"] == "เต็มรูป")
+
+    # the four fixes, checked on their own
+    all_ok &= check(
+        "an unclosed parenthesis is trimmed",
+        extractor._trim_unclosed_paren("บริษัท ก จำกัด (สานักงาน") == "บริษัท ก จำกัด",
+    )
+    all_ok &= check(
+        "a closed one is kept",
+        extractor._trim_unclosed_paren("บริษัท ก จำกัด (สำนักงานใหญ่)")
+        == "บริษัท ก จำกัด (สำนักงานใหญ่)",
+    )
+    all_ok &= check(
+        "a copy designation is not a customer box",
+        extractor._in_buyer_block(
+            ["ต้นฉบับสำหรับลูกค้า / Original", "เลขประจำตัวผู้เสียภาษี 0105568123476"], 1
+        ) is False,
+    )
+    all_ok &= check(
+        "a real customer box still is",
+        extractor._in_buyer_block(
+            ["ชื่อผู้ซื้อ : บริษัท ก จำกัด", "เลขประจำตัวผู้เสียภาษี 0105568123476"], 1
+        ),
+    )
+    all_ok &= check(
+        "a word with no digit is not a document number",
+        extractor._doc_info_pairing_is_sound({"doc_no": "ITEM"}) is False,
+    )
+    all_ok &= check(
+        "an unrecognisable label in front of a separator is still stripped",
+        extractor._clean_buyer_value("นามสื่อ / Name : บริษัท อิสาน พัฒนาการค้า จำกัด")
+        == "บริษัท อิสาน พัฒนาการค้า จำกัด",
     )
 
     # multi-invoice split
