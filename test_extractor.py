@@ -2169,6 +2169,101 @@ Downl
 วันที่
 """
 
+# The แบร์ เกียร์ invoice from the live app. Its document box was emitted
+# as a label column and a value column far apart, with the CUSTOMER box
+# and the entire items table threaded between them:
+#
+#     เลขที่/ Invoice No ... ที่อยู่ / Address ... 456/89 ถนนสุขุมวิท ...
+#     วันที่ / Date ... อีเมล / Email ... ล่าดับ ... HDD External 2TB ...
+#     ครบกำหนด / Due Date / 01210 / 1 มีนาคม 2568 / 1 เมษายน 2568
+#
+# No two labels were ever adjacent, so the box yielded nothing and the
+# forward search for the number walked into the buyer's address and
+# returned "456/89"; the date was 16 lines from its label and came back
+# empty. The buyer label's English half is glued to the name with no
+# punctuation ("ชื่อลูกค้า / Customer บริษัท C จำกัด"), so "Customer" stayed
+# stuck to the front of the recorded name.
+REAL_BEARGEAR_RAW_TEXT = """BEAR GEAR
+IT SYSTEM
+บริษัท แบร์ เกียร์ ไอที ซิสเต็ม จำกัด
+Bear Gear IT System Co., Ltd.
+99/15 ถนนรัชดาภิเษก แขวงห้วยขวาง เขตห้วยขวาง กรุงเทพมหานคร 10310
+เลขประจำตัวผู้เสียภาษี : 0105568034567 (สำนักงานใหญ่)
+อีเมล : @BGearsite.com
+ชื่อลูกค้า / Customer บริษัท C จำกัด
+เลขที่/ Invoice No
+ที่อยู่ / Address
+456/89 ถนนสุขุมวิท ตำบลบางเมือง อำเภอเมืองสมุทรปราการ
+จังหวัดสมุทรปราการ 10270
+วันที่ / Date
+เลขประจำตัวผู้เสียภาษี 0115569345678
+อีเมล / Email
+@Ccompany.com
+ล่าดับ
+No.
+รายการสินค้า
+Description
+1
+HDD External 2TB
+2
+RAM DDR4 16GB
+ครบกำหนด / Due Date
+01210
+1 มีนาคม 2568
+1 เมษายน 2568
+เงื่อนไขชาระเงิน / Terms เครดิต 31 วัน
+อ้างอิง / Reference
+REF-2568-03
+Invoice
+ใบกำกับภาษี
+ต้นฉบับ / ORIGINAL
+จำนวน
+Quantity
+หน่วย
+Unit
+ราคา/หน่วย
+Unit Price
+ราคารวม
+Amount
+1
+ชน
+5,500.00
+5,500.00
+1
+ชิ้น
+1,500.00
+1,500.00
+หมายเหตุ / Remark
+1. กรุณาตรวจสอบรายการสินค้าและจำนวนเงินให้ถูกต้องก่อนชำระเงิน
+2. หากมีข้อสงสัยเกี่ยวกับใบกำกับภาษีนี้ กรุณาติดต่อผู้ออกเอกสารตามอีเมลด้านบน
+จำนวนเงินรวมทั้งสิ้น
+Grand Total
+ราคารวม / Subtotal
+7,000.00
+ภาษีมูลค่าเพิ่ม (7%) / VAT
+490.00
+0.00
+ส่วนลด / Discount
+7,490.00
+(เจ็ดพันสี่ร้อยเก้าสิบบาทถ้วน )
+ช่องทางการชาระเงิน / Payment
+ชื่อบัญชี
+เลขที่บัญชี
+BGear.inc
+022-222-2222
+BEAR GEAR IT SYSTEM
+คุณธนกร วัฒนกิจ
+ผู้รับสินค้า
+(Received by)
+ขอบคุณที่ใช้บริการ
+Thank you for your business
+คุณศิริพร แสงทอง
+ผู้มีอำนาจลงนาม
+กรรมการบริษัท (Authorized Signature)
+@BGearsite.com
+"""
+
+
 
 
 
@@ -3446,6 +3541,62 @@ def main():
         extractor._is_table_column_header(
             ["หมายเหตุ", "ราคารวม", "60,000"], 1
         ) is False,
+    )
+
+    # regression: the แบร์ เกียร์ invoice (see REAL_BEARGEAR_RAW_TEXT)
+    fields26 = extractor.extract_fields(REAL_BEARGEAR_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real แบร์ เกียร์ OCR text fields ---")
+    for k, v in fields26.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real beargear: invoice_no is the number, not the buyer's house number",
+        fields26["invoice_no"] == "01210",
+    )
+    all_ok &= check(
+        "real beargear: date read 16 lines from its label",
+        fields26["invoice_date_iso"] == "2025-03-01",
+    )
+    all_ok &= check(
+        "real beargear: buyer name loses the English half of its label",
+        fields26["buyer_name"] == "บริษัท C จำกัด",
+    )
+    all_ok &= check(
+        "real beargear: seller",
+        fields26["seller_name"] == "บริษัท แบร์ เกียร์ ไอที ซิสเต็ม จำกัด",
+    )
+    all_ok &= check("real beargear: tax id", fields26["seller_tax_id"] == "0105568034567")
+    all_ok &= check("real beargear: subtotal", fields26["subtotal"] == 7000.00)
+    all_ok &= check("real beargear: vat", fields26["vat"] == 490.00)
+    all_ok &= check("real beargear: total", fields26["total"] == 7490.00)
+    all_ok &= check("real beargear: doc_type", fields26["doc_type"] == "เต็มรูป")
+
+    # the three fixes, checked on their own
+    all_ok &= check(
+        "'เลขที่/ Invoice No' is a document-number label",
+        extractor._classify_doc_info_label("เลขที่/ Invoice No") == "doc_no",
+    )
+    all_ok &= check(
+        "a spelled-out Thai date is a document-box value",
+        extractor._is_doc_value_line("1 มีนาคม 2568"),
+    )
+    all_ok &= check(
+        "scattered labels pair with their value run by order",
+        extractor._doc_info_by_order(
+            ["เลขที่/ Invoice No", "ที่อยู่ / Address", "456/89 ถนนสุขุมวิท",
+             "วันที่ / Date", "ครบกำหนด / Due Date",
+             "01210", "1 มีนาคม 2568", "1 เมษายน 2568"]
+        ) == {"doc_no": "01210", "doc_date": "1 มีนาคม 2568", "due_date": "1 เมษายน 2568"},
+    )
+    all_ok &= check(
+        "an items-table fragment is not paired with them",
+        extractor._doc_info_by_order(
+            ["เลขที่/ Invoice No", "วันที่ / Date", "1", "2"]
+        ) == {},
+    )
+    all_ok &= check(
+        "an English label word with no punctuation is stripped",
+        extractor._clean_buyer_value("Customer บริษัท C จำกัด") == "บริษัท C จำกัด",
     )
 
     # multi-invoice split

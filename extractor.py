@@ -1034,6 +1034,16 @@ def _clean_buyer_value(val):
     # consumes the Thai half, leaving "/Customer Name : " glued to the front
     # of the name — drop a leading run of Latin label words up to its colon.
     val = re.sub(r"^[/|\-–]?\s*[A-Za-z][A-Za-z.\s]{0,30}[:：]\s*", "", val).strip()
+    # The English half of a bilingual buyer label can sit in front of the
+    # name with no punctuation at all: "ชื่อลูกค้า / Customer บริษัท C จำกัด".
+    # Matching the Thai half consumed only "ชื่อลูกค้า" and stripping the
+    # slash left "Customer" glued to the front of the recorded name.
+    shorter = re.sub(
+        r"^(?:Customer|Client|Buyer|Purchaser|Name|Company(?:\s*Name)?|"
+        r"Bill\s*To|Sold\s*To)\b[\s:：/|｜\-–]*", "", val, flags=re.IGNORECASE
+    ).strip()
+    if len(shorter) >= 3:
+        val = shorter
     # A label OCR mangled past recognition still behaves like one: short,
     # in front of a separator, naming no company. Confirmed live:
     # "นามผู้ซื้อ / Name :" came out "นามสื่อ / Name :", matched none of the
@@ -1750,8 +1760,13 @@ def _totals_pairing_is_sound(pairing):
 # exist so every label in the box classifies and the positional pairing
 # with the value run stays aligned.
 _DOC_INFO_BLOCK_KEYS = [
-    ("doc_no", [r"เลขที่เอกสาร(?!อ้างอิง)", r"Document\s*No", r"^เลขที่?\s*[/／]\s*No\.?\s*$"]),
-    ("doc_date", [r"วันที่เอกสาร(?!อ้างอิง)", r"Document\s*Date", r"^วันที่?\s*[/／]\s*Date\.?\s*$"]),
+    # The English half may name the document in the middle — "เลขที่ /
+    # Invoice No.", "วันที่ / Invoice Date" — which the bare "เลขที่ / No."
+    # form did not match, so the box's first label was invisible.
+    ("doc_no", [r"เลขที่เอกสาร(?!อ้างอิง)", r"Document\s*No",
+                r"^เลขที่?\s*[/／]\s*(?:Tax\s*)?(?:Invoice|Doc(?:ument)?)?\s*No\.?\s*$"]),
+    ("doc_date", [r"วันที่เอกสาร(?!อ้างอิง)", r"Document\s*Date",
+                  r"^วันที่?\s*[/／]\s*(?:Tax\s*)?(?:Invoice|Doc(?:ument)?)?\s*Date\.?\s*$"]),
     ("doc_ref_no", [r"เลขที่เอกสารอ้างอิง", r"Document\s*Ref"]),
     ("doc_ref_date", [r"วันที่เอกสารอ้างอิง", r"Date\s*of\s*Ref"]),
     ("credit", [r"^เครดิต\s*[/／]?", r"^Credit\b"]),
@@ -1765,6 +1780,68 @@ _DOC_INFO_BLOCK_KEYS = [
 # number, a reference number, or a dd/mm/yyyy date) — deliberately narrower
 # than PURE_NUMBER_LINE_RE since these values aren't always pure digits.
 DOC_VALUE_LINE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-/.]*$")
+
+
+# A document box's value column holds tokens ("INV-2568-004", "01210") and
+# dates, and a Thai date is spelled out ("1 มีนาคม 2568") — a shape the
+# token pattern cannot match, which left such a value column looking one
+# line long.
+_THAI_DATE_LINE_RE = re.compile(
+    r"^\d{1,2}\s*(?:" + "|".join(re.escape(m) for m in THAI_MONTHS) + r")\s*\d{2,4}$"
+)
+
+
+def _is_doc_value_line(line):
+    return bool(DOC_VALUE_LINE_RE.match(line) or _THAI_DATE_LINE_RE.match(line))
+
+
+# How far above its values a document box's labels may be looked for.
+_DOC_INFO_LABEL_REACH = 40
+
+
+def _doc_info_by_order(lines):
+    """Pair a document box's labels with its values by ORDER alone.
+
+    _extract_doc_info_block needs the labels to form a run. Confirmed live:
+    an invoice's label column came out with the CUSTOMER box and the whole
+    items table threaded through it —
+
+        เลขที่/ Invoice No ... ที่อยู่ / Address ... 456/89 ถนนสุขุมวิท ...
+        วันที่ / Date ... อีเมล / Email ... ล่าดับ ... HDD External 2TB ...
+        ครบกำหนด / Due Date / 01210 / 1 มีนาคม 2568 / 1 เมษายน 2568
+
+    — so no two labels were ever adjacent and the box yielded nothing,
+    while the forward search for the number walked into the address and
+    returned "456/89".
+
+    The labels keep their order even when scattered, so here they are read
+    in order and zipped onto the value run. The counts must match exactly
+    and the result must still pass _doc_info_pairing_is_sound, which is
+    what stops an items-table fragment being paired with them."""
+    n = len(lines)
+    i = 0
+    while i < n:
+        if not (lines[i] and _is_doc_value_line(lines[i])):
+            i += 1
+            continue
+        start = i
+        values = []
+        while i < n and lines[i] and _is_doc_value_line(lines[i]):
+            values.append(lines[i])
+            i += 1
+        if len(values) < 2:
+            continue
+        labels = []
+        for j in range(max(0, start - _DOC_INFO_LABEL_REACH), start):
+            key = _classify_doc_info_label(lines[j])
+            if key is not None and (not labels or labels[-1] != key):
+                labels.append(key)
+        if len(labels) != len(values):
+            continue
+        pairing = dict(zip(labels, values))
+        if _doc_info_pairing_is_sound(pairing):
+            return pairing
+    return {}
 
 
 def _classify_doc_info_label(line):
@@ -1823,7 +1900,7 @@ def _extract_doc_info_block(text):
             # list, so a blank trailing field just isn't included
             if _doc_info_pairing_is_sound(pairing):
                 return pairing
-    return {}
+    return _doc_info_by_order(lines)
 
 
 # How far past the labels a document box's values may sit before we stop
