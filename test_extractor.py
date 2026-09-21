@@ -2470,6 +2470,107 @@ IV6801224-125
 ......................
 """
 
+# The มั่งมีศรีสุข invoice for March. Its totals box has FIVE rows, but the
+# grand total's label ("รวมมูลค่าสุทธิ") was emitted after the first three
+# figures, leaving a run of four labels —
+#
+#     สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม / สินค้าที่เสียภาษีมูลค่าเพิ่ม /
+#     ภาษีมูลค่าเพิ่ม VAT 7% / หัก เงินมัดจำ
+#
+# — against only three figures (0.00 / 5,500.00 / 385.00). A label run
+# longer than its value run had no handling at all, so it was skipped
+# whole; the next starting point, one label shorter, matched the count
+# exactly and was taken without question, pairing every figure one row
+# out: the exempt 0.00 became ยอดก่อนภาษี and the subtotal became the VAT.
+REAL_MUNGMEE_MAR_RAW_TEXT = """มศส
+เลขประจำตัวผู้เสียภาษีอากร
+0105568000222
+บริษัท มั่งมีศรีสุข จำกัด (สำนักงานใหญ่)
+MUNGMEE SRISUK CO., LTD. (Head Office)
+88/8 อาคารมั่งมีศรีสุข ชั้น 12 ถนนรัชดาภิเษก แขวงห้วยขวาง เขตห้วยขวาง กรุงเทพมหานคร 10310
+88/8 Mungmee Srisuk Building, 12th Floor, Ratchadaphisek Rd., Huai Khwang, Bangkok 10310
+โทร./Tel. 02-988-1234 E-mail : sales@mungmeesrisuk.example
+ใบเสร็จรับเงิน / ใบกำกับภาษี
+RECEIPT / TAX INVOICE
+งวดประจำเดือนมีนาคม 2568
+นามผู้ชื้อ / Name
+บริษัท A จำกัด
+ที่อยู่ / Address
+99/15 ถนนวิภาวดีรังสิต แขวงจอมพล เขตจตุจักร กรุงเทพมหานคร 10900
+เลขประจำตัวผู้เสียภาษีอากร / Tax ID
+0105569123456
+เลขที่/NO
+วันที่ / DATE
+เครดิต / CREDIT
+วันครบกำหนด / DUE DATE
+เลขที่ใบสั่งซื้อ / PO.NO
+พนักงานขาย / SALEMAN
+รหัสลูกค้า / CUSTOMER
+INV-2568-03
+31/03/2568
+30 วัน
+30/04/2568
+PO-2568-0305
+อรทัย สุขใจ
+CUS-0088
+ล่าดับที
+ITEM
+1
+สมุดบันทึกปกหนัง
+2
+ปากกาลูกลื่น
+รายการ
+DESCRIPTION
+จำนวน
+หน่วยนับ
+ราคาต่อหน่วย
+V/N*
+QUANTITY
+UNIT
+UNIT PRICE
+ส่วนลดต่อหน่วย
+DISCOUNT
+หมายเหตุ * (V ภาษีมูลค่าเพิ่ม / N ยกเว้นภาษีมูลค่าเพิ่ม)
+จำนวนเงินรวม (ตัวอักษร)
+GRAND TOTAL (ALPHABET)
+ห้าพันแปดร้อยแปดสิบห้าบาทถ้วน
+<
+10
+40
+เล่ม
+95.00
+10.00
+หน้าที่ 1/1
+จำนวนเงินบาท
+AMOUNT (BAHT)
+3,400.00
+V
+300
+ด้าม
+8,00
+1.00
+2,100,00
+- สินค้าตามใบกำกับภาษีนี้ แม้จะส่งมอบแก่ผู้ซื้อแล้วก็ยังคงเป็นทรัพย์สินของผู้ขายจนกว่าผู้ซื้อได้ชำระเงินเรียบร้อยแล้ว
+- โปรดสั่งจ่ายเช็คขีดคร่อมในนาม "บริษัท มั่งมีศรีสุข จำกัด เท่านั้น
+- การชำระเงินด้วยเช็คจะสมบูรณ์ต่อเมื่อได้รับเงินตามเช็คเรียบร้อยแล้ว
+- ถ้าสินค้าไม่ถูกต้องโปรดแจ้งกลับภายใน 7 วัน หากเกินกำหนดทางบริษัทขอสงวนสิทธิ์ในการเปลี่ยนหรือคืน
+- สินค้าหมวดเครื่องเขียนรับประกันคุณภาพ 30 วันนับจากวันที่ส่งมอบ
+สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม
+สินค้าที่เสียภาษีมูลค่าเพิ่ม
+ภาษีมูลค่าเพิ่ม VAT 7%
+หัก เงิน จ่า
+0.00
+5,500.00
+385.00
+รวมมูลค่าสุทธิ
+บริษัท มั่งมีศรีสุข จำกัด
+ผู้มีอำนาจลงนาม
+AUTHORIZED SIGNATURE
+0.00
+5,885,00
+"""
+
+
 
 
 
@@ -3878,6 +3979,45 @@ def main():
             "พนักงานขาย/Salesman\nกำหนดชาระ/Due Date\nเลขที่/No.\n"
             "ล่าดับ\nรายการ\nจำนวน\n1.\nสีน้ำ\n6\n10\n130.-\n"
         ) == {},
+    )
+
+    # regression: the มั่งมีศรีสุข March invoice (see REAL_MUNGMEE_MAR_RAW_TEXT)
+    fields30 = extractor.extract_fields(REAL_MUNGMEE_MAR_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real มั่งมีศรีสุข (มี.ค.) OCR text fields ---")
+    for k, v in fields30.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real mungmee mar: subtotal is the VATable goods, not the exempt 0.00",
+        fields30["subtotal"] == 5500.00,
+    )
+    all_ok &= check("real mungmee mar: vat", fields30["vat"] == 385.00)
+    all_ok &= check("real mungmee mar: total", fields30["total"] == 5885.00)
+    all_ok &= check(
+        "real mungmee mar: the three amounts agree",
+        fields30["needs_review"] is False,
+    )
+    all_ok &= check("real mungmee mar: invoice_no", fields30["invoice_no"] == "INV-2568-03")
+    all_ok &= check("real mungmee mar: date", fields30["invoice_date_iso"] == "2025-03-31")
+    all_ok &= check("real mungmee mar: buyer", fields30["buyer_name"] == "บริษัท A จำกัด")
+    all_ok &= check("real mungmee mar: tax id", fields30["seller_tax_id"] == "0105568000222")
+
+    # the two halves of the fix, checked on their own
+    all_ok &= check(
+        "more labels than figures pairs from the front",
+        extractor._extract_totals_block(
+            "สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม\nสินค้าที่เสียภาษีมูลค่าเพิ่ม\n"
+            "ภาษีมูลค่าเพิ่ม VAT 7%\nหัก เงินมัดจำ\n0.00\n5,500.00\n385.00\n"
+        ) == {"exempt": "0.00", "subtotal": "5,500.00", "vat": "385.00"},
+    )
+    all_ok &= check(
+        "a pairing with no total is sound when the rate is exactly 7%",
+        extractor._totals_pairing_is_sound({"subtotal": "5,500.00", "vat": "385.00"}),
+    )
+    all_ok &= check(
+        "...and is not when it isn't",
+        extractor._totals_pairing_is_sound({"subtotal": "0.00", "vat": "5,500.00"})
+        is False,
     )
 
     # multi-invoice split

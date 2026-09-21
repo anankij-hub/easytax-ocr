@@ -1669,6 +1669,20 @@ def _extract_totals_block(text):
                 candidate = _pair_totals(labels, values[offset:offset + len(labels)])
                 if _totals_pairing_is_sound(candidate):
                     return candidate
+        # And the mirror: more labels than figures, because the box's last
+        # row was emitted somewhere else. Confirmed live: a totals box of
+        # four labels ("สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม", "สินค้าที่เสียภาษี
+        # มูลค่าเพิ่ม", "ภาษีมูลค่าเพิ่ม VAT 7%", "หัก เงินมัดจำ") against
+        # three figures was skipped entirely, and the next start — one
+        # label short — paired those same figures one row out, recording
+        # the exempt 0.00 as the subtotal and the subtotal as the VAT.
+        # Front-aligned first, since it is the trailing value that is
+        # missing; end-aligned after, and only a sound pairing is taken.
+        if len(labels) > len(values):
+            for candidate_labels in (labels[:len(values)], labels[-len(values):]):
+                candidate = _pair_totals(candidate_labels, values)
+                if _totals_pairing_is_sound(candidate):
+                    return candidate
     return {}
 
 
@@ -1745,7 +1759,18 @@ def _totals_pairing_is_sound(pairing):
     subtotal = _clean_number(pairing.get("subtotal"))
     vat = _clean_number(pairing.get("vat"))
     total = _clean_number(pairing.get("total"))
-    return _amounts_balance(subtotal, vat, total) and _vat_rate_ok(subtotal, vat)
+    if _amounts_balance(subtotal, vat, total) and _vat_rate_ok(subtotal, vat):
+        return True
+    # A box that prints its grand total apart from the rest yields a
+    # pairing with no total in it at all, which the balance test can never
+    # accept. A VAT that is exactly 7% of the subtotal printed beside it
+    # is evidence enough on its own: shift the alignment by one row and an
+    # unrelated figure lands there and the rate falls apart. The subtotal
+    # must be non-zero, or an exempt-goods 0.00 paired with a 0.00 would
+    # satisfy any rate at all.
+    if total is None and subtotal is not None and vat is not None:
+        return subtotal > 0 and _vat_rate_ok(subtotal, vat)
+    return False
 
 
 # Some invoices' document-info box (เลขที่เอกสาร/วันที่เอกสาร/เลขที่เอกสารอ้างอิง/
