@@ -107,7 +107,12 @@ def _is_other_field_date(text, m):
 # so a year-first date is captured whole: against the old \d{1,2} opener,
 # "2025/02/18" matched starting from its third character, giving "25/02/18"
 # — filed as 25 February 2018.
-DATE_TOKEN_RE = re.compile(r"\d{1,4}[/.\-]\d{1,2}[/.\-]\d{1,4}")
+# The spaces are horizontal only, never \s: a date is printed on one line,
+# and letting the gaps swallow newlines would splice three numbers stacked
+# in a column into a date that was never on the page. Confirmed live: an
+# invoice dated "25 /08/ 2025" — OCR put a space either side of each slash
+# — matched nothing at all and was filed with no date.
+DATE_TOKEN_RE = re.compile(r"\d{1,4}[ \t]*[/.\-][ \t]*\d{1,2}[ \t]*[/.\-][ \t]*\d{1,4}")
 # The lookbehinds keep "ภาษีมูลค่าเพิ่ม" from matching the two goods-total
 # lines that merely mention VAT — "สินค้าที่เสียภาษีมูลค่าเพิ่ม" (the pre-tax
 # subtotal) and "สินค้าที่ยกเว้นภาษีมูลค่าเพิ่ม" (exempt goods). Reading
@@ -672,7 +677,7 @@ def _parse_thai_date(raw):
 
     # Year first (2025/02/18, or 2568/02/18 in พ.ศ.) — checked before the
     # day-first form, which a four-digit year can't be mistaken for.
-    m = re.match(r"(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})\s*$", raw)
+    m = re.match(r"(\d{4})[ \t]*[/.\-][ \t]*(\d{1,2})[ \t]*[/.\-][ \t]*(\d{1,2})\s*$", raw)
     if m:
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
         if y > 2400:
@@ -682,7 +687,7 @@ def _parse_thai_date(raw):
         except ValueError:
             return None
 
-    m = re.match(r"(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})", raw)
+    m = re.match(r"(\d{1,2})[ \t]*[/.\-][ \t]*(\d{1,2})[ \t]*[/.\-][ \t]*(\d{2,4})", raw)
     if m:
         d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
         if y < 100:
@@ -1837,11 +1842,22 @@ def _doc_info_by_order(lines):
         if len(values) < 2:
             continue
         labels = []
+        last_label = -1
         for j in range(max(0, start - _DOC_INFO_LABEL_REACH), start):
             key = _classify_doc_info_label(lines[j])
             if key is not None and (not labels or labels[-1] != key):
                 labels.append(key)
+            if key is not None:
+                last_label = j
         if len(labels) != len(values):
+            continue
+        # A heading BETWEEN two of the labels is fine — that is exactly the
+        # split box this function exists for. A heading between the last
+        # label and the values is not: it means the run belongs to the
+        # items table, not to the box. Confirmed live: "6" / "10" / "130.-"
+        # from an item row paired with three document-box labels.
+        if any(TABLE_HEADER_LINE_RE.search(lines[j]) or _is_table_column_header(lines, j)
+               for j in range(last_label + 1, start) if lines[j]):
             continue
         pairing = dict(zip(labels, values))
         if _doc_info_pairing_is_sound(pairing):
@@ -1894,6 +1910,14 @@ def _extract_doc_info_block(text):
         # ID, and a document date has to be a real date.
         k = j
         while k < n and k - j <= _DOC_INFO_MAX_GAP:
+            # The document box sits above the items table, so its values
+            # are never found past that table's heading. Confirmed live: a
+            # box whose own values failed to pair kept scanning, reached
+            # the first item row ("6", "10", "130.-") and paired against
+            # it, and the invoice was filed under the number "130.-".
+            if lines[k] and (TABLE_HEADER_LINE_RE.search(lines[k])
+                             or _is_table_column_header(lines, k)):
+                break
             if not (lines[k] and _is_doc_value_line(lines[k])):
                 k += 1
                 continue

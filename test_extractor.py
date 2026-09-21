@@ -2352,6 +2352,125 @@ Thank you for your business
 @BGearsite.com
 """
 
+# A second scan of the สิงโต invoice. OCR put a space either side of each
+# slash in its date — "25 /08/ 2025" — which matched no date pattern at
+# all, so the invoice came through with no date.
+REAL_SINGTO2_RAW_TEXT = """ใบเสร็จรับเงิน/ใบกำกับภาษี
+บริษัท สิงโต จำกัด (สำนักงานใหญ่)
+23/1 ต.สุเทพ อ.เมือง จ.เชียงใหม่ 50200
+เลขประจำตัวผู้เสียภาษี 0105562123454
+ชื่อลูกค้า
+บริษัท กากา จำกัด
+เลขที
+77890
+ที่อยู่
+123/6 ต.เชียงคาน อ.เชียงคาน จ.เลย 42110
+วันที่
+25 /08/ 2025
+เลขผู้เสียภาษี
+1234567890888
+ล่าดับ
+รายการสินค้า
+จำนวน
+ราคา/หน่วย
+ราคารวม
+1
+ออกแบบผลิตภัณฑ์ (โลโก้งานวิ่ง)
+2
+30,000
+60,000
+หมายเหตุ
+จำนวนเงินรวมทั้งสิ้น
+การชำระเงิน
+เงินสด
+บัตรเดบิต / บัตรเครดิต
+O โอนผ่านบัญชี
+วันที่
+De
+(เบนจามิน ชาห์)
+หมายเหตุ
+ราคารวม
+60,000
+ภาษีมูลค่าเพิ่ม (7%)
+รวมทั้งสิ้น
+4,200
+64,200
+64,200
+(หกหมื่นสี่พันสองร้อยบาทถ้วน)
+อนุมัติโดย
+รับชำระ
+(คิมเบอร์ลี แมค)
+วันที่
+"""
+
+# A third JP invoice. Its document box is preceded by an empty strip of
+# labels ("เลขที่ใบสั่งซี้อ/Order No.", "พนักงานขาย/Salesman",
+# "กำหนดชาระ/Due Date") whose values are all blank, so the label run held
+# five labels against the box's two values and could not pair. The scan
+# for a matching value run then carried on DOWNWARD past the items-table
+# heading, reached the first item row, and paired the run "6" / "10" /
+# "130.-" with them — filing the invoice under the number "130.-" while
+# the real one, IV6801224-125, sat two lines below its own label.
+REAL_JP3_RAW_TEXT = """JP
+บริษัท โจธนารักษ์ แพตเดอร์สัน จำกัด (สำนักงานใหญ่)
+123/69 ถนนฉลองกรุง แขวงลาดกระบัง เขตลาดกระบัง กรุงเทพฯ 10520
+เลขประจำตัวผู้เสียภาษี 0105576890143
+โทร. 020-5345-678 /แฟกซ์. 026-9267-00
+ชื่อลูกค้า/Customer Name : บริษัท เอ จำกัด
+ที่อยู่/Address : 99/15 ถนนวิภาวดีรังสิต แขวงจอมพล เขตจตุจักร กรุงเทพมหานคร 10900
+เลขประจำตัวผู้เสียภาษี/TAX ID : 0105569123456
+เลขที่ใบสั่งซี้อ/Order No.
+พนักงานขาย/Salesman
+กำหนดชาระ/Due Date
+ใบกำกับภาษี/ใบเสร็จรับเงิน
+TAX INVOICE/RECEIPT
+เลขที่/No.
+วันที่/Date.
+**ต้นฉบับ/Original**
+IV6801224-125
+24/12/68
+รหัสลูกค้า/Customer Code : 7820-12
+ล่าดับ
+รายการ
+จำนวน
+ราคา
+ราคาสุทธิ
+1.
+สีนํ้า
+6
+10
+130.-
+1,300.-
+2.
+กระดาษ (200 แกรม, A3)
+20
+35.-
+700.-
+หมายเหตุ
+000
+ราคารวมสินค้า (บาท)
+2,000.-
+(สองพันหนึ่งร้อยสี่สิบบาทถ้วน)
+ภาษีมูลค่าเพิ่ม (VAT) 7%
+จำนวนเงินทั้งสิ้น (บาท)
+140.-
+2,140.-
+การชาระเงิน/Payment
+เงินสด Cash
+โอนเข้าบัญชี Tanter.No..
+เช็ค Chesue.No..
+วันที่/Date
+ในนามบริษัท โจธนารักษ์ แพตเดอร์สัน จำกัด
+ผู้มีอานาจลงนาม
+.....................
+ลงนามพนักงานรับเงิน
+(วันที
+..)
+ลงนามพนักงานส่งของ
+......................
+"""
+
+
 
 
 
@@ -3716,6 +3835,49 @@ def main():
             "01210\n1 กุมภาพันธ์ 2568\n1 มีนาคม 2568\n"
         ) == {"doc_no": "01210", "doc_date": "1 กุมภาพันธ์ 2568",
               "due_date": "1 มีนาคม 2568"},
+    )
+
+    # regression: a second scan of the สิงโต invoice (see REAL_SINGTO2_RAW_TEXT)
+    fields28 = extractor.extract_fields(REAL_SINGTO2_RAW_TEXT, ocr_confidence=90.0)
+    all_ok &= check(
+        "real singto2: date with spaces around its slashes",
+        fields28["invoice_date_iso"] == "2025-08-25",
+    )
+    all_ok &= check("real singto2: invoice_no", fields28["invoice_no"] == "77890")
+    all_ok &= check("real singto2: subtotal", fields28["subtotal"] == 60000.00)
+    all_ok &= check("real singto2: total", fields28["total"] == 64200.00)
+    all_ok &= check(
+        "'25 /08/ 2025' parses",
+        extractor._parse_thai_date("25 /08/ 2025") == "2025-08-25",
+    )
+    all_ok &= check(
+        "the spaces may not span a line break",
+        extractor.DATE_TOKEN_RE.search("1\n/\n2\n/\n2025") is None,
+    )
+
+    # regression: the third JP invoice (see REAL_JP3_RAW_TEXT)
+    fields29 = extractor.extract_fields(REAL_JP3_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real JP #3 OCR text fields ---")
+    for k, v in fields29.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real jp3: invoice_no is the number, not an item row's unit price",
+        fields29["invoice_no"] == "IV6801224-125",
+    )
+    all_ok &= check("real jp3: date", fields29["invoice_date_iso"] == "2025-12-24")
+    all_ok &= check("real jp3: buyer", fields29["buyer_name"] == "บริษัท เอ จำกัด")
+    all_ok &= check("real jp3: tax id", fields29["seller_tax_id"] == "0105576890143")
+    all_ok &= check("real jp3: subtotal", fields29["subtotal"] == 2000.00)
+    all_ok &= check("real jp3: vat", fields29["vat"] == 140.00)
+    all_ok &= check("real jp3: total", fields29["total"] == 2140.00)
+    all_ok &= check("real jp3: doc_type", fields29["doc_type"] == "เต็มรูป")
+    all_ok &= check(
+        "a document box does not pair with rows below the items-table heading",
+        extractor._extract_doc_info_block(
+            "พนักงานขาย/Salesman\nกำหนดชาระ/Due Date\nเลขที่/No.\n"
+            "ล่าดับ\nรายการ\nจำนวน\n1.\nสีน้ำ\n6\n10\n130.-\n"
+        ) == {},
     )
 
     # multi-invoice split
