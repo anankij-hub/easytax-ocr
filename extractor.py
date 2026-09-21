@@ -513,39 +513,50 @@ TAXID_LABELLED_RE = re.compile(
     re.IGNORECASE,
 )
 
-# How far above its own line a taxpayer ID is still inside the customer
-# box. "ชื่อผู้ซื้อ : ..." sits directly above the buyer's ID; the box
-# heading "ข้อมูลลูกค้า (Customer)" a line or two further up.
-_BUYER_BLOCK_REACH = 3
-
-
-def _in_buyer_block(lines, i, reach=_BUYER_BLOCK_REACH):
-    """True when line `i` is printed inside the customer box, so whatever
-    it carries describes the BUYER rather than the issuer.
-
-    Scanned upward from the line itself and stopped by another party's
-    name — once the letterhead's "บริษัท ... จำกัด" is reached, the customer
-    box is behind us and a buyer label further up belongs to it, not to
-    line `i`."""
-    for j in range(i, max(-1, i - reach - 1), -1):
-        line = lines[j]
-        # The copy designation names the customer without being the
-        # customer's box: "ต้นฉบับสำหรับลูกค้า / Original" says which copy
-        # this is. Confirmed live: OCR mangled it to "นพัน ลูกค้า/Original",
-        # the surviving "ลูกค้า" put the SELLER's taxpayer ID inside the
-        # customer box, and the invoice was filed under the buyer's ID.
-        if j != i and DOC_FURNITURE_RE.search(line):
-            continue
-        if any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS):
-            return True
-        if j != i and COMPANY_NAME_HINT_RE.search(line):
-            return False
-    return False
-
 TAXID_LABEL_RE = re.compile(
     _TAXID_LABEL_CORE + r"[^\d\n]{0,20}(\d[\d\s-]{8,18}\d)",
     re.IGNORECASE,
 )
+
+
+# How many lines a customer box may run to. Generous enough for a heading,
+# a name, a three-line address and a taxpayer ID.
+_BUYER_BLOCK_MAX_SPAN = 10
+
+
+def _buyer_block_lines(lines):
+    """The line numbers that fall inside a customer box.
+
+    A box opens at a buyer label and runs until the NEXT party is named.
+    The first company name after the label is the customer's own, so it
+    does not end the box — the second one does. Confirmed live: an invoice
+    printed the customer block above the letterhead, and judging each line
+    by "is there a buyer label just above it, and no company name in
+    between" stopped at the buyer's own name "บริษัท B จำกัด", put the
+    customer's taxpayer ID outside the box and filed it as the issuer's.
+
+    A copy designation ("ต้นฉบับสำหรับลูกค้า / Original") names the customer
+    without opening a box, so it never starts one."""
+    inside = set()
+    for i, line in enumerate(lines):
+        if DOC_FURNITURE_RE.search(line):
+            continue
+        if not any(re.search(k, line, re.IGNORECASE) for k in BUYER_KEYWORDS):
+            continue
+        named = bool(COMPANY_NAME_HINT_RE.search(line))
+        for j in range(i, min(len(lines), i + _BUYER_BLOCK_MAX_SPAN)):
+            if j > i and COMPANY_NAME_HINT_RE.search(lines[j]):
+                if named:
+                    break  # a second party is named: the box ended above
+                named = True
+            inside.add(j)
+    return inside
+
+
+def _in_buyer_block(lines, i):
+    """True when line `i` is printed inside a customer box, so whatever it
+    carries describes the BUYER rather than the issuer."""
+    return i in _buyer_block_lines(lines)
 
 
 def extract_tax_id(text):
@@ -560,8 +571,9 @@ def extract_tax_id(text):
         candidate = re.sub(r"\D", "", m.group(1))
         if len(candidate) == 13:
             labelled.append((text.count("\n", 0, m.start()), candidate))
+    buyer_lines = _buyer_block_lines(lines) if labelled else set()
     for idx, candidate in labelled:
-        if not _in_buyer_block(lines, idx):
+        if idx not in buyer_lines:
             return candidate
     if labelled:
         return labelled[0][1]

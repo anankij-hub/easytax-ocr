@@ -2570,6 +2570,61 @@ AUTHORIZED SIGNATURE
 5,885,00
 """
 
+# The พรีเมียร์ คลีน invoice from the live app. The customer block is
+# printed ABOVE the letterhead, and both parties state a taxpayer ID. The
+# customer box was judged line by line — "is there a buyer label just
+# above, with no other company named in between" — which broke on the
+# buyer's OWN name: "รายละเอียดลูกค้า" / "บริษัท B จำกัด" / two address
+# lines / the buyer's ID. Scanning up from that ID reached "บริษัท B
+# จำกัด", took it for the next party, judged the ID to be outside the
+# customer box, and filed the CUSTOMER's 0505569234567 as the issuer's.
+REAL_PREMIERCLEAN_RAW_TEXT = """ใบเสร็จรับเงิน/ใบกำกับภาษี
+เลขที่ 000125
+วันที่ 31/1/2025
+รายละเอียดลูกค้า
+บริษัท B จำกัด
+188 หมู่ 7 ถนนเชียงใหม่-ลำพูน ตำบลหนองผึ้ง อำเภอสารภี
+จังหวัดเชียงใหม่ 50140
+เลขประจำตัวผู้เสียภาษี 0505569234567
+บริษัท พรีเมียร์ คลีน เซอร์วิส จำกัด
+125/8 ถนนเชียงใหม่-ลำพูน ตำบลหนองหอย อำเภอ
+เมืองเชียงใหม่ จังหวัดเชียงใหม่ 50000
+โทร 087-5693687
+เลขประจำตัวผู้เสียภาษี 0115569000012
+ล่าดับ
+รายการ
+จำนวน ราคาต่อหน่วย
+จำนวนเงิน
+ค่าบริการทำความสะอาดสำนักงาน
+1
+ประจำเดือน มกราคม
+2
+ค่าอุปกรณ์และน้ำยาทำความสะอาด
+จำนวนเงินรวมทั้งสิ้น(ตัวอักษร) : หนึ่งพันเก้าร้อยยี่สิบหกบาทถ้วน
+1
+1,500.00
+1,500.00
+300.00
+300.00
+รวมราคา
+ภาษีมูลค่าเพิ่ม 7%
+รวมทั้งสิ้น
+1,800.00
+126.00
+1,926.00
+ริชาร์ด ซันเชซ
+ผู้มีอำนาจลงนาม
+ชำระโดย
+เงินสด
+โอนเงิน
+ธนาคาร ABC เลขที่ 0123 45678901
+จำนวนเงิน 1,926.00 บาท เวลา 14.23 น.
+ไอริน แสนสุข
+ผู้รับเงิน
+วันที่ 31/1/2025
+"""
+
+
 
 
 
@@ -4018,6 +4073,44 @@ def main():
         "...and is not when it isn't",
         extractor._totals_pairing_is_sound({"subtotal": "0.00", "vat": "5,500.00"})
         is False,
+    )
+
+    # regression: the พรีเมียร์ คลีน invoice (see REAL_PREMIERCLEAN_RAW_TEXT)
+    fields31 = extractor.extract_fields(REAL_PREMIERCLEAN_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real พรีเมียร์ คลีน OCR text fields ---")
+    for k, v in fields31.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real premierclean: tax id is the issuer's, not the customer's above it",
+        fields31["seller_tax_id"] == "0115569000012",
+    )
+    all_ok &= check(
+        "real premierclean: seller",
+        fields31["seller_name"] == "บริษัท พรีเมียร์ คลีน เซอร์วิส จำกัด",
+    )
+    all_ok &= check("real premierclean: buyer", fields31["buyer_name"] == "บริษัท B จำกัด")
+    all_ok &= check("real premierclean: invoice_no", fields31["invoice_no"] == "000125")
+    all_ok &= check("real premierclean: date", fields31["invoice_date_iso"] == "2025-01-31")
+    all_ok &= check("real premierclean: subtotal", fields31["subtotal"] == 1800.00)
+    all_ok &= check("real premierclean: vat", fields31["vat"] == 126.00)
+    all_ok &= check("real premierclean: total", fields31["total"] == 1926.00)
+    all_ok &= check("real premierclean: doc_type", fields31["doc_type"] == "เต็มรูป")
+
+    # the customer box's extent, checked on its own
+    customer_box = [
+        "รายละเอียดลูกค้า", "บริษัท B จำกัด", "188 หมู่ 7 ถนนเชียงใหม่-ลำพูน",
+        "จังหวัดเชียงใหม่ 50140", "เลขประจำตัวผู้เสียภาษี 0505569234567",
+        "บริษัท พรีเมียร์ คลีน เซอร์วิส จำกัด", "โทร 087-5693687",
+        "เลขประจำตัวผู้เสียภาษี 0115569000012",
+    ]
+    all_ok &= check(
+        "the buyer's own name does not close the customer box",
+        extractor._in_buyer_block(customer_box, 4),
+    )
+    all_ok &= check(
+        "the next party's name does",
+        extractor._in_buyer_block(customer_box, 7) is False,
     )
 
     # multi-invoice split
