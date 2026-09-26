@@ -2944,6 +2944,73 @@ Den
 """
 
 
+# ใบจริง หจก.ภควดีปิโตรเลียม — หน้า 32 ของกอง "ใบจริงอันใหม่.pdf"
+# ข้อความดิบจาก Cloud Vision. เป็นบิลเงินสดเล่มกระดาษที่กรอกด้วยลายมือ
+# เดิมอ่านถูกช่องเดียวจากเก้าช่อง
+#
+#   ประเภท     ย่อ            <- เพราะหาผู้ซื้อไม่เจอ
+#   ผู้ขาย     บริษัท นำโชค จำกัด  <- นี่คือผู้ซื้อ สลับกัน
+#   ผู้ซื้อ     ว่าง
+#   เลขที่      ว่าง            <- "Ne 11143" คือ "№ 11143"
+#   วันที่      1111-11-01      <- แกะมาจากเลขผู้เสียภาษี 1-1111-11111-11-1
+#   ยอดทั้งสาม  ว่าง
+#
+# ต้นเหตุสี่อย่าง แก้ได้สามอย่างครึ่ง:
+#   1. "หจก." ไม่อยู่ในคำใบ้ว่าบรรทัดนี้เป็นชื่อบริษัท หัวกระดาษ
+#      "(Esso) หจก.ภควดีปิโตรเลียม (สำนักงานใหญ่)" จึงไม่เคยถูกพิจารณา
+#   2. "1111-11-1" ที่ซ่อนอยู่ในเลขผู้เสียภาษีแปลงเป็นวันที่ได้จริง
+#   3. "№" ถูกอ่านเป็น "Ne"
+#   4. บาทกับสตางค์เขียนคนละช่อง OCR จึงได้ "85981" แทน 859.81
+#
+# วันที่ยังอ่านไม่ได้และจะอ่านไม่ได้: บนกระดาษเขียน "22 6 57" ด้วยลายมือ
+# และเลข 6 ถูกอ่านเป็นตัวอักษร "b" การเดาว่า b คือ 6 ไม่มีอะไรมายืนยัน
+# ได้เลย ปล่อยให้ว่างแล้วขึ้นธงให้คนกรอกคือคำตอบที่ถูกต้องของเคสนี้
+REAL_PAKAWADEE_RAW_TEXT = """เล่มที่
+223
+1
+Ne 11143
+บิลเงินสด/ใบกำกับภาษี
+(Esso) หจก.ภควดีปิโตรเลียม (สำนักงานใหญ่)
+298 หมู่ 1 ตำบลสันทราย อำเภอเมือง จังหวัดเชียงราย 57000
+m 053-773957 Fax. 053-700437
+เลขประจำตัวผู้เสียภาษี 0573553000860
+บริษัท นำโชค จำกัด
+นาม...
+วันที่
+22
+b
+57
+ที่อยู่ 123/11 ม.3 ต.แม่คือ อ.ดอยสะเก็ด จ.เชียงใหม่ 50210
+เลขประจำตัวผู้เสียภาษี 1-1111-11111-11-1
+เลขประจำตัวผู้เสียภาษี
+สนง.ใหญ่ สาขาที่
+จำนวน
+รายการ
+@
+จำนวนเงิน
+(รวมภาษี)
+E-20
+แก๊สโซฮอลล์ 95
+23.3) | แก๊สโซฮอลล์ 91
+ดีเซล
+จ่านวนเงินรวม
+(ตัวสักษร)
+3973
+920
+ราคาสินค้า
+ภาษีมูลค่าเพิ่ม
+7%
+ราคารวมภาษี
+85981
+6019
+920
+ผู้รับเงิน..
+On
+ผู้รับสินค้า..
+11364
+"""
+
+
 def check(label, cond):
     status = "PASS" if cond else "FAIL"
     print(f"[{status}] {label}")
@@ -4561,6 +4628,31 @@ def main():
         "one locality word alone is not enough to call a line an address",
         not extractor._looks_like_address(" INV-2026-001 ถนน"),
     )
+
+    # ---- ใบจริง หจก.ภควดีปิโตรเลียม: บิลลายมือเล่มกระดาษ ----
+    pak = extractor.extract_fields(REAL_PAKAWADEE_RAW_TEXT, ocr_confidence=90.0)
+    all_ok &= check("real pakawadee: seller is the หจก., not the buyer",
+                    pak["seller_name"] == "(Esso) หจก.ภควดีปิโตรเลียม (สำนักงานใหญ่)")
+    all_ok &= check("real pakawadee: buyer", pak["buyer_name"] == "บริษัท นำโชค จำกัด")
+    all_ok &= check("real pakawadee: seller tax id", pak["seller_tax_id"] == "0573553000860")
+    all_ok &= check("real pakawadee: invoice_no from the numero sign read as Ne",
+                    pak["invoice_no"] == "11143")
+    all_ok &= check("real pakawadee: เต็มรูป", pak["doc_type"] == "เต็มรูป")
+    # บาทกับสตางค์คนละช่อง จุดทศนิยมหายไป แต่เลขคณิตกู้คืนได้
+    all_ok &= check("real pakawadee: subtotal recovered from 85981", pak["subtotal"] == 859.81)
+    all_ok &= check("real pakawadee: vat recovered from 6019", pak["vat"] == 60.19)
+    all_ok &= check("real pakawadee: total", pak["total"] == 920.00)
+    # วันที่ลายมืออ่านไม่ได้ — ต้องว่างและขึ้นธง ไม่ใช่เดา
+    all_ok &= check("real pakawadee: no date is guessed from the taxpayer ID",
+                    pak["invoice_date_iso"] is None)
+    all_ok &= check("real pakawadee: the missing date is flagged for a human",
+                    pak["needs_review"] and "วันที่" in (pak["review_reason"] or ""))
+    # การ์ดตัวจริงที่กันไม่ให้เลขผู้เสียภาษีกลายเป็นวันที่
+    all_ok &= check("a taxpayer ID is never a date",
+                    extractor.extract_date("เลขประจำตัวผู้เสียภาษี 1-1111-11111-11-1")[1]
+                    is None)
+    all_ok &= check("...but a real date on its own still parses",
+                    extractor.extract_date("วันที่ 22/07/2568")[1] == "2025-07-22")
 
     # ---- ใบจริง เป๋าเปา: ชื่อผู้ซื้อกลายเป็นชื่อสินค้า ----
     pao = extractor.extract_fields(REAL_PAOPAO_RAW_TEXT, ocr_confidence=90.0)

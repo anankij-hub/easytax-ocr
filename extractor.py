@@ -72,6 +72,10 @@ INVOICE_NO_KEYWORDS = [
     # this receipt's own.
     r"(?<!เดิม)เลขที่?(?![่]?(?:บัญชี|อ้างอิง|ใบสั่งซื้อ|ผู้เสีย|ประจำตัว|สมาชิก))",
     r"Invoice\s*No\.?", r"Tax\s*Invoice\s*No\.?", r"Document\s*No\.?", r"No\.",
+    # บิลเงินสดเล่มกระดาษพิมพ์เลขที่เล่มด้วยเครื่องหมาย numero "№" ซึ่ง OCR
+    # อ่านเป็น "Ne" เกือบทุกครั้ง (ยืนยันจากใบ หจก.ภควดีปิโตรเลียม:
+    # "Ne 11143" คือเลขที่ 11143) บังคับให้เป็นคำเดี่ยว ไม่ใช่ส่วนของคำอังกฤษ
+    r"№", r"(?<![A-Za-z])N[eo°](?![A-Za-z])",
 ]
 DATE_KEYWORDS = [r"วันที่", r"Date"]
 
@@ -219,6 +223,9 @@ BUYER_KEYWORDS = [
     # อยู่ท้ายสุดของรายการ ป้ายที่เจาะจงกว่าจึงชนะเสมอถ้ามี
     r"^\s*ชื่อ(?!\S*(?:สินค้า|บริษัท|ร้าน|ผู้ขาย|ผู้รับ|ผู้จัดทำ|บัญชี|ธนาคาร|"
     r"พนักงาน|สมาชิก|ย่อ|เต็ม|เรื่อง|ไฟล์|งาน))",
+    # "นาม" เปล่า ๆ เป็นป้ายผู้ซื้อบนบิลเงินสดเล่มกระดาษ ("นาม.........")
+    # กันคำที่ขึ้นต้นด้วยนามแต่หมายถึงอย่างอื่น
+    r"^\s*นาม(?!สกุล|บัตร|แฝง|ธรรม)",
 ]
 # NOTE: "Buyer Name" is intentionally NOT in this forward-search list — on
 # a real invoice it was OCR'd sitting AFTER the buyer name value instead of
@@ -803,6 +810,22 @@ def extract_invoice_no(text):
     return val or _invoice_no_under_title(text)
 
 
+def _date_token_stands_alone(text, m):
+    """วันที่ที่ถูกต้องต้องไม่ใช่ชิ้นส่วนที่ตัดออกมาจากตัวเลขยาวกว่า
+
+    ยืนยันจากใบจริงของ หจก.ภควดีปิโตรเลียม: เลขผู้เสียภาษีของผู้ซื้อพิมพ์
+    เป็น "1-1111-11111-11-1" ซึ่งข้างในมี "1111-11-1" ซ่อนอยู่ แปลงแล้วได้
+    วันที่ 1111-11-01 ซึ่งเป็นวันที่ที่ใช้ได้จริงตามปฏิทิน ระบบจึงรับไว้
+    แล้วบันทึกเป็นวันที่ของใบกำกับ
+
+    เช็คแค่ตัวติดกันซ้ายขวา: วันที่จริงมีช่องว่าง ตัวอักษร หรือหัวบรรทัด
+    ขนาบอยู่เสมอ ไม่เคยมีเลขหรือขีดติดหน้าติดหลัง"""
+    glue = "-0123456789"
+    before = text[m.start() - 1] if m.start() > 0 else " "
+    after = text[m.end()] if m.end() < len(text) else " "
+    return before not in glue and after not in glue
+
+
 def _parse_thai_date(raw):
     """Try to parse a Thai-formatted date string into ISO yyyy-mm-dd.
     Handles dd/mm/yyyy (พ.ศ. or ค.ศ.) and 'dd เดือน ปี' formats."""
@@ -904,11 +927,13 @@ def extract_date(text):
     # bank account can match the shape ("456-7-89012-3" yields "56-7-8901")
     # and used to be returned as the date, unparsed, purely for being first.
     for dm in DATE_TOKEN_RE.finditer(text):
+        if not _date_token_stands_alone(text, dm):
+            continue
         iso = _parse_thai_date(dm.group(0))
         if iso:
             return dm.group(0), iso
     dm = DATE_TOKEN_RE.search(text)
-    if dm:
+    if dm and _date_token_stands_alone(text, dm):
         return dm.group(0), _parse_thai_date(dm.group(0))
     return None, None
 
@@ -916,8 +941,16 @@ def extract_date(text):
 # Case-insensitive: a letterhead's English name is normally set in capitals
 # ("FARM NGERN FARM THONG CO., LTD."), which the case-sensitive pattern did
 # not recognise as a company name at all.
+# "หจก." คือคำย่อของห้างหุ้นส่วนจำกัด และร้านค้าน้ำมัน/อะไหล่จำนวนมากพิมพ์
+# หัวกระดาษด้วยคำย่อล้วน ๆ ไม่มีคำว่าบริษัทหรือจำกัดเลยสักคำ
+#
+# ยืนยันจากใบจริงของ หจก.ภควดีปิโตรเลียม: หัวกระดาษคือ
+# "(Esso) หจก.ภควดีปิโตรเลียม (สำนักงานใหญ่)" ซึ่งไม่เข้าเงื่อนไขนี้เลย
+# ผู้ขายจึงไม่เคยถูกพิจารณา แล้วชื่อ "บริษัท นำโชค จำกัด" ของผู้ซื้อชนะ
+# ไปโดยปริยาย — ผลคือผู้ขายกับผู้ซื้อสลับกัน และช่องผู้ซื้อว่าง
 COMPANY_NAME_HINT_RE = re.compile(
-    r"บริษัท|ห้างหุ้นส่วน|จำกัด|มหาชน|Co\.,?\s*Ltd|Company|Corp|Public\s*Co",
+    r"บริษัท|ห้างหุ้นส่วน|หจก\.?|บจก\.?|บมจ\.?|จำกัด|มหาชน|"
+    r"Co\.,?\s*Ltd|Company|Corp|Public\s*Co",
     re.IGNORECASE,
 )
 
@@ -1969,7 +2002,35 @@ def _totals_from_number_run(text):
     #
     # วางไว้หลังสุดเพราะตัวเลขที่อยู่ติดกันเป็นหลักฐานที่ดีกว่า: มันบอกว่า
     # ทั้งสามตัวมาจากกล่องเดียวกันบนกระดาษ
-    return _balanced_triple(sorted(numbers), numbers)
+    found = _balanced_triple(sorted(numbers), numbers)
+    if found is not None:
+        return found
+
+    # ชั้นสุดท้าย: เผื่อว่าจุดทศนิยมหายไป
+    #
+    # ใบเล่มกระดาษเขียนบาทกับสตางค์คนละช่องในตาราง ไม่มีจุดคั่น OCR จึง
+    # คายออกมาติดกันเป็นจำนวนเต็ม ยืนยันจากใบ หจก.ภควดีปิโตรเลียม:
+    # 859.81 / 60.19 / 920.00 ออกมาเป็น "85981" / "6019" / "920"
+    #
+    # การหารร้อยเป็นการเดา — แต่เป็นการเดาที่ตรวจสอบตัวเองได้ เพราะยังต้อง
+    # ผ่านสมการสองชั้นและต้องมีคำตอบเดียวเหมือนเดิม
+    #
+    # ที่ต้องแยกเป็นชั้นต่างหาก ไม่ใช่โยนรวมไปกับชั้นบน เพราะตัวเลือกที่
+    # เพิ่มขึ้นเท่าตัวทำให้เกิดคำตอบซ้อนได้ง่ายขึ้นมาก วัดกับใบจริงของ
+    # เป๋าเปา: เติมจุดแล้วได้สามคำตอบ โดยตัวปลอมตัวหนึ่งคือ 22.33 ซึ่งมา
+    # จากเลขที่ใบกำกับ "POSS6807/2233" ถ้ารวมสองชั้นเข้าด้วยกัน ใบที่ชั้น
+    # บนเคยตอบถูกอยู่แล้วจะกลายเป็นกำกวมและตอบไม่ได้ — ได้อย่างเสียอย่าง
+    # แยกชั้นแล้วมีแต่ได้ เพราะชั้นนี้ทำงานเฉพาะตอนที่ชั้นบนไม่เจออะไรเลย
+    padded = set(numbers)
+    for token in _ANY_NUMBER_RE.findall(text or ""):
+        if "." in token:
+            continue
+        val = _clean_number(token)
+        if val is not None and val >= 100:
+            padded.add(round(val / 100.0, 2))
+    if len(padded) == len(numbers):
+        return None
+    return _balanced_triple(sorted(padded), padded)
 
 
 def _balanced_triple(values, numbers=None):
