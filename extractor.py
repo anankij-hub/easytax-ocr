@@ -901,18 +901,46 @@ def _in_prose_line(text, pos):
     return len(line.strip()) > _PROSE_LINE_MIN_LEN
 
 
+def _line_around(text, pos):
+    start = text.rfind("\n", 0, pos) + 1
+    end = text.find("\n", pos)
+    return text[start:end if end != -1 else len(text)]
+
+
 def extract_date(text):
     for keywords in (ISSUE_DATE_KEYWORDS, DATE_KEYWORDS):
+        specific = keywords is ISSUE_DATE_KEYWORDS
         for kw in keywords:
             for m in re.finditer(kw, text, re.IGNORECASE):
-                if _in_signature_block(text, m.start()) or _in_prose_line(text, m.start()):
+                # ป้ายวันที่ที่เจาะจง ("วันที่ใบกำกับภาษี") อยู่ในแถวหัวตาราง
+                # ของกล่องข้อมูลเอกสารได้ ซึ่งเป็นแถวยาวเพราะมีหัวคอลัมน์อีก
+                # หลายอันต่อท้าย — ยาวแต่ไม่ใช่ร้อยแก้ว
+                #
+                # ยืนยันจากใบร้านสหกรณ์ มช.: แถว "วันที่ใบกำกับภาษี เวลา
+                # (Time) ลำดับเครื่องเก็บเงิน ... แผ่นที่" ถูกตัดทิ้งเพราะยาว
+                # เกินเกณฑ์ร้อยแก้ว ป้ายที่เจาะจงที่สุดจึงหายไป แล้วตกไปใช้
+                # "วันที่ (Date) : 14/07/2015" ซึ่ง OCR อ่านปีผิดเป็น 2015
+                # ทั้งที่ใบพิมพ์ 2025 — ผิดไปสิบปี คนละรอบยื่น ภ.พ.30
+                #
+                # ยอมเฉพาะป้ายเจาะจงเท่านั้น ส่วน "วันที่"/"Date" เปล่า ๆ
+                # ยังต้องโดนกฎร้อยแก้วเหมือนเดิม เพราะคำสองคำนั้นโผล่ใน
+                # เงื่อนไขท้ายใบได้จริง
+                on_header = specific and bool(
+                    TABLE_HEADER_LINE_RE.search(_line_around(text, m.start())))
+                if _in_signature_block(text, m.start()):
+                    continue
+                if _in_prose_line(text, m.start()) and not on_header:
                     continue
                 if _is_other_field_date(text, m):
                     continue
                 # Window needs to be wide enough to skip past an intervening
                 # bilingual English sub-label (e.g. "วันที่เอกสาร\nDocument
                 # Date\n02/08/2025") without truncating the date itself.
-                window_text = text[m.end():m.end() + 60]
+                #
+                # ป้ายที่อยู่ในแถวหัวตารางนับเป็นบรรทัด ไม่ใช่ตัวอักษร เพราะ
+                # ที่เหลือของบรรทัดเป็นหัวคอลัมน์อันอื่น ค่าอยู่ถัดลงไป
+                window_text = ("\n".join(text[m.end():].split("\n")[:5]) if on_header
+                               else text[m.end():m.end() + 60])
                 dm = DATE_TOKEN_RE.search(window_text)
                 if dm:
                     iso = _parse_thai_date(dm.group(0))
@@ -2297,6 +2325,10 @@ def _extract_doc_info_block(text):
 _DOC_INFO_MAX_GAP = 15
 
 
+# ตัวเลขล้วนที่มีจุดทศนิยม 1-2 ตำแหน่ง = จำนวนเงินที่พิมพ์บนใบ
+_MONEY_SHAPED_RE = re.compile(r"\d{1,3}(?:,\d{3})*\.\d{1,2}")
+
+
 def _doc_info_pairing_is_sound(pairing):
     """Reject a label/value alignment that produced something a document
     number and date plainly are not."""
@@ -2313,6 +2345,19 @@ def _doc_info_pairing_is_sound(pairing):
         # scan ran past the values — which are printed ": INV-6809-042",
         # behind a colon — and reached the items table's heading, which is
         # how an invoice came to be filed under the number "ITEM".
+        return False
+    if _MONEY_SHAPED_RE.fullmatch(doc_no):
+        # จำนวนเงินไม่ใช่เลขเอกสาร
+        #
+        # ยืนยันจากใบร้านสหกรณ์ มช.: ป้าย "เลขที่เอกสาร P004000599" พิมพ์
+        # ค่าไว้บนบรรทัดเดียวกันอยู่แล้ว แต่ตัวจับคู่กลับไปจับมันเข้ากับ
+        # แถวตัวเลขของกล่องยอดด้านล่าง ได้ doc_no = "0.00" ซึ่งผ่านด่าน
+        # "มีตัวเลข" ไปได้สบาย ๆ แล้วไปทับค่าที่ถูกต้องที่หาเจอตั้งแต่แรก
+        #
+        # เช็คแค่ "รูปทรงของจำนวนเงิน" คือตัวเลขล้วนที่มีจุดทศนิยมหนึ่งถึง
+        # สองตำแหน่ง ไม่ใช้ _looks_like_doc_no ซึ่งบังคับว่าต้องมีอักขระที่
+        # ไม่ใช่ตัวเลขปนอยู่ด้วย — เงื่อนไขนั้นจะไปปัดเลขที่ใบเสร็จ POS ที่
+        # เป็นตัวเลขล้วนสิบสองหลักทิ้งไปด้วย
         return False
     doc_date = pairing.get("doc_date")
     if doc_date is not None and _parse_thai_date(doc_date) is None:
