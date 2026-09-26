@@ -4305,6 +4305,31 @@ def main():
         )["needs_review"] is True,
     )
 
+    # ---- เลขยาว ๆ บนกระดาษไม่ใช่จำนวนเงิน ----
+    # ยืนยันจากหน้าเว็บจริง: ใบ B2S หน้า 58 แสดง "ยอดรวม" เป็น
+    # 6.62025072250051e+23 ซึ่งคือเลขใต้บาร์โค้ด 66202507225005110311586
+    all_ok &= check(
+        "a barcode number is not an amount",
+        extractor._clean_number("66202507225005110311586") is None,
+    )
+    all_ok &= check(
+        "a 13-digit taxpayer ID is not an amount either",
+        extractor._clean_number("0994000423179") is None,
+    )
+    all_ok &= check(
+        "a 12-digit POS receipt number is not an amount",
+        extractor._clean_number("041501408013") is None,
+    )
+    # ...แต่จำนวนเงินจริงต้องไม่โดนลูกหลง รวมถึงใบที่ยอดหลักล้าน
+    all_ok &= check(
+        "an ordinary amount still parses",
+        extractor._clean_number("1,107.50") == 1107.50,
+    )
+    all_ok &= check(
+        "a million-baht amount still parses",
+        extractor._clean_number("9,876,543.21") == 9876543.21,
+    )
+
     # ---- ประโยค "ยกเลิกใบเดิม" ต้องไม่ถูกขุดเอาเลขที่/วันที่ ----
     # ประโยคด้านล่างคัดมาจากใบจริง B2S หน้า 58 ของกอง "ใบจริงอันใหม่.pdf"
     # ใบนี้ออกแทนใบย่อที่ถูกยกเลิก จึงประกาศเลขที่และวันที่ของใบเก่าไว้ใต้

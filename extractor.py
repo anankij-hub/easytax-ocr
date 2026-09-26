@@ -279,6 +279,18 @@ CURRENCY_SUFFIX_RE = re.compile(r"\s*(?:บาท|บ\.|Baht|THB|฿)\s*$", re.I
 COMMA_DECIMAL_RE = re.compile(r"^([-+]?\d{1,3}(?:,\d{3})*),(\d{2})$")
 
 
+# เพดานของ "จำนวนเงินที่เป็นไปได้บนใบกำกับภาษีหนึ่งใบ"
+#
+# ใบกำกับภาษีใบเดียวไม่มีทางถึงหนึ่งหมื่นล้านบาท แต่ตัวเลขยาว ๆ บนกระดาษมี
+# เต็มไปหมด — บาร์โค้ด เลขอ้างอิง เลขผู้เสียภาษี เลขที่ใบเสร็จ POS
+#
+# ยืนยันจากใบจริง B2S: เลขใต้บาร์โค้ด 66202507225005110311586 ถูกเก็บเป็น
+# "ยอดรวม" แล้วแสดงบนหน้าเว็บว่า 6.62025072250051e+23 ซึ่งนอกจากผิดแล้วยัง
+# ทำให้ยอดทั้งใบใช้ไม่ได้เลย. ตัดที่ขนาดของตัวเลขคือกฎที่เถียงไม่ได้:
+# ไม่มีการตีความไหนที่เลข 23 หลักเป็นจำนวนเงินของใบนี้
+_MAX_PLAUSIBLE_AMOUNT = 1e10
+
+
 def _clean_number(s):
     if s is None:
         return None
@@ -289,9 +301,12 @@ def _clean_number(s):
         s = f"{m.group(1)}.{m.group(2)}"
     s = s.replace(",", "").strip()
     try:
-        return float(s)
+        val = float(s)
     except ValueError:
         return None
+    if abs(val) >= _MAX_PLAUSIBLE_AMOUNT:
+        return None
+    return val
 
 
 # One column heading of an items table, alone on its line — what a
