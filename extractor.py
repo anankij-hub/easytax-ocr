@@ -66,7 +66,11 @@ THAI_MONTHS = {
 # can't sidestep it by matching one character less.
 INVOICE_NO_KEYWORDS = [
     r"เลขที่ใบกำกับภาษี", r"เลขที่เอกสาร", r"เลขที่ใบเสร็จ",
-    r"เลขที่?(?![่]?(?:บัญชี|อ้างอิง|ใบสั่งซื้อ|ผู้เสีย|ประจำตัว))",
+    # "(?<!เดิม)" — a reissued receipt names the document it REPLACES:
+    # "เป็นการยกเลิกและออกใบกำกับภาษีฉบับใหม่ แทนฉบับเดิมเลขที่ 041030406649".
+    # Confirmed live on a Makro receipt: that cancelled number was filed as
+    # this receipt's own.
+    r"(?<!เดิม)เลขที่?(?![่]?(?:บัญชี|อ้างอิง|ใบสั่งซื้อ|ผู้เสีย|ประจำตัว|สมาชิก))",
     r"Invoice\s*No\.?", r"Tax\s*Invoice\s*No\.?", r"Document\s*No\.?", r"No\.",
 ]
 DATE_KEYWORDS = [r"วันที่", r"Date"]
@@ -360,6 +364,42 @@ def _best_match_on_line(rest, value_pattern, require_digit=False, max_start=None
     return matches[0].group(0).strip()
 
 
+# ใบที่ออกแทนใบเดิมจะประกาศเลขที่ของ "ใบที่ถูกยกเลิก" ไว้บนหัวกระดาษ และ
+# ประกาศนั้นมีทั้งเลขที่และวันที่ของใบเก่า ซึ่งไม่ใช่ของใบที่ถืออยู่
+#
+# เดิมกันไว้ด้วย lookbehind "(?<!เดิม)เลขที่" ซึ่งพอดีกับสำนวนของ Makro
+# ("แทนฉบับเดิมเลขที่ 041030406649") แต่ไม่ครอบคลุมสำนวนอื่น ใบจริงของ B2S
+# เขียนว่า "เป็นการยกเลิกใบกำกับภาษีอย่างย่อเลขที่ 103-107827 วันที่ 22
+# กรกฎาคม 2568 และออกใบกำกับภาษีมีอิเล็กทรอนิกส์ใหม่แทน" — ไม่มีคำว่า
+# "เดิม" ติดกับ "เลขที่" เลย การ์ดเดิมจึงไม่ทำงาน
+#
+# กันที่ต้นเหตุแทน: สิ่งที่ทำให้เลขนั้นใช้ไม่ได้คือ "ประโยคนี้พูดถึงการ
+# ยกเลิก" ไม่ใช่รูปประโยคแบบใดแบบหนึ่ง จึงดูว่าก่อนถึงคำค้นมีคำว่ายกเลิก
+# หรือไม่ ใช้ได้กับทุกฟิลด์ที่ค้นด้วยคำนำหน้า ไม่ใช่แค่เลขที่
+_CANCELLED_DOC_RE = re.compile(
+    r"ยกเลิก|แทนฉบับ|ฉบับเดิม|Cancell?ed|Replaces?\b|In\s+place\s+of",
+    re.IGNORECASE,
+)
+
+# "เลขที่" ในที่อยู่ไปรษณีย์แปลว่าบ้านเลขที่ ไม่ใช่เลขที่เอกสาร
+#
+# ยืนยันจากใบจริง B2S: บรรทัดที่อยู่ผู้ขายคือ "เลขที่ 9 หมู่ 3 ตำบลสุเทพ
+# อำเภอเมืองเชียงใหม่ จังหวัดเชียงใหม่ 50200" ซึ่งอยู่เหนือกล่องหัวเอกสาร
+# การค้นไปข้างหน้าจากคำว่า "เลขที่" จึงเจอบรรทัดนี้ก่อน แล้วคืน "50200"
+# — รหัสไปรษณีย์ของผู้ขาย — เป็นเลขที่ใบกำกับภาษี
+#
+# แยกออกจากเลขที่เอกสารได้ด้วยคำบอกเขตการปกครอง ซึ่งไม่มีทางโผล่ในบรรทัด
+# เลขที่เอกสาร บังคับให้เจออย่างน้อยสองคำ เพราะคำเดียวอาจบังเอิญได้ เช่น
+# "จ." ที่เป็นตัวย่ออย่างอื่น สองคำขึ้นไปแทบเป็นไปไม่ได้ที่จะบังเอิญ
+_ADDRESS_WORD_RE = re.compile(
+    r"หมู่ที่|หมู่|ถนน|ซอย|ตำบล|แขวง|อำเภอ|เขต|จังหวัด|(?<![ก-ฮ])[ตอจถซ]\.(?=\s*[ก-ฮ])"
+)
+
+
+def _looks_like_address(fragment):
+    return len(_ADDRESS_WORD_RE.findall(fragment)) >= 2
+
+
 def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahead_lines=2,
                          skip_header_lines=True, require_digit=False):
     """Find the value that appears shortly after one of the given keywords.
@@ -392,7 +432,15 @@ def _find_after_keyword(text, keywords, value_pattern=NUM_RE, window=60, lookahe
             m = re.search(kw, line, re.IGNORECASE)
             if not m:
                 continue
+            # ประโยคยกเลิกพูดถึงเอกสาร "ฉบับอื่น" ไม่ใช่ฉบับนี้ — ทั้งเลขที่
+            # และวันที่ในประโยคนั้นเป็นของใบที่ถูกยกเลิกไปแล้ว ยื่น ภ.พ.30
+            # ด้วยเลขนั้นคือยื่นผิดใบ ดู _CANCELLED_DOC_RE
+            if _CANCELLED_DOC_RE.search(line[:m.start()]):
+                continue
             rest = line[m.end():]
+            # บรรทัดที่อยู่: "เลขที่" ที่นี่คือบ้านเลขที่ ดู _looks_like_address
+            if _looks_like_address(rest):
+                continue
             val = _best_match_on_line(rest, value_pattern, require_digit=require_digit)
             if val:
                 return val
@@ -1377,13 +1425,74 @@ def _amounts_balance(subtotal, vat, total):
     return abs((subtotal + vat) - total) <= max(_AMOUNT_TOL, abs(total) * 0.0005)
 
 
-def _vat_rate_ok(subtotal, vat):
-    """VAT เป็น 7% ของยอดก่อนภาษี (หรือเป็นศูนย์ทั้งคู่)"""
+def _vat_rate_ok(subtotal, vat, exempt=0.0):
+    """VAT เป็น 7% ของฐานภาษี (= ยอดก่อนภาษี − ส่วนที่ยกเว้น)
+
+    exempt=0 คือใบปกติที่ทั้งใบเสีย 7% เท่ากันหมด ซึ่งเป็นค่าเริ่มต้น
+    ผู้เรียกที่พิสูจน์ได้ว่าใบนี้เป็นอัตราผสมเท่านั้นจึงจะส่ง exempt มา
+    — ดู _exempt_portion ว่า "พิสูจน์" แปลว่าอะไร"""
     if subtotal is None or vat is None:
         return False
-    if subtotal <= 0:
+    base = subtotal - (exempt or 0.0)
+    if base <= 0:
         return vat == 0
-    return abs(vat / subtotal - VAT_RATE) <= _RATE_TOL
+    return abs(vat / base - VAT_RATE) <= _RATE_TOL
+
+
+# ตัวเลขทุกตัวที่ "พิมพ์อยู่จริง" บนหน้านั้น ใช้เป็นหลักฐานใน _exempt_portion
+_ANY_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _page_numbers(text):
+    """เซ็ตของตัวเลขบวกทุกตัวที่ปรากฏบนหน้า
+
+    ไม่กรองอะไรเลยโดยตั้งใจ — หน้าที่ของมันคือตอบว่า "เลขนี้มีอยู่บนกระดาษ
+    ไหม" ให้ตรงตามความจริง ส่วนการตัดสินว่าเลขไหนมีความหมายเป็นเรื่องของ
+    ผู้เรียก"""
+    out = set()
+    for token in _ANY_NUMBER_RE.findall(text or ""):
+        val = _clean_number(token)
+        if val is not None and val > 0:
+            out.add(round(val, 2))
+    return out
+
+
+def _exempt_portion(subtotal, vat, numbers):
+    """ถ้าใบนี้เป็น VAT อัตราผสม คืนค่าส่วนของยอดก่อนภาษีที่ไม่ถูกคิด VAT
+
+    ทำไมต้องมี: ใบกำกับที่ขายทั้งของที่เสีย VAT 7% และของที่ยกเว้น VAT
+    (ผลไม้สด นม ค่าขนส่ง) พิมพ์ยอดก่อนภาษีเป็นผลรวมของทั้งสองส่วน แต่พิมพ์
+    VAT เป็น 7% ของเฉพาะส่วนที่เสียภาษี ความสัมพันธ์ "VAT = 7% ของยอดก่อน
+    ภาษี" จึงไม่จริงบนใบพวกนี้ ทั้งที่อ่านถูกทุกตัว. ยืนยันจากใบจริง
+    (Makro หน้า 9 ของกองใบจริง): แถว 0.00% 81.00 บวกแถว 7.00%
+    195.33/13.67/209.00 ได้ TOTAL 276.33/13.67/290.00 — 276.33 + 13.67
+    เท่ากับ 290.00 พอดี แต่ 13.67 เป็นแค่ 4.95% ของ 276.33 ระบบเดิมจึง
+    ตีว่าอ่านผิดและขึ้นเตือนทุกครั้ง ทั้งที่ไม่มีอะไรผิด
+
+    คืน 0.0 เมื่อเป็นใบ 7% ธรรมดา, คืน None เมื่อ VAT เข้ากับยอดก่อนภาษี
+    ไม่ได้ไม่ว่าจะตีความแบบไหน (= อ่านผิดจริง ต้องเตือน)
+
+    การจะยอมรับว่าเป็นอัตราผสมต้องครบทั้งสามข้อ ไม่ใช่แค่ "หารแล้วลงตัว":
+      1. VAT เป็น 7% ของฐานภาษี b พอดี
+      2. ส่วนที่เหลือ (subtotal − b) มากกว่าศูนย์
+      3. ทั้ง b และส่วนที่เหลือ ต้องเป็นตัวเลขที่พิมพ์อยู่บนใบจริง
+    ข้อ 3 คือตัวกันเดา: ถ้าไม่มีข้อนี้ ยอดคู่ไหนก็ "เป็นอัตราผสมได้" เสมอ
+    เพราะประดิษฐ์ b = vat/0.07 ขึ้นมาเองได้เรื่อย ๆ การบังคับให้ทั้งฐานภาษี
+    และส่วนยกเว้นปรากฏบนกระดาษ ทำให้เงื่อนไขแน่นพอ ๆ กับสมการสองชั้นที่ใช้
+    ตรวจใบปกติ"""
+    if subtotal is None or vat is None:
+        return None
+    if _vat_rate_ok(subtotal, vat):
+        return 0.0
+    if not numbers or vat <= 0 or subtotal <= 0:
+        return None
+    for base in numbers:
+        if base >= subtotal or not _vat_rate_ok(base, vat):
+            continue
+        rest = round(subtotal - base, 2)
+        if rest > 0 and rest in numbers:
+            return rest
+    return None
 
 
 def _fmt_baht(n):
@@ -1394,15 +1503,20 @@ def _fmt_baht(n):
     return s[:-3] if s.endswith(".00") else s
 
 
-def totals_mismatch_reason(subtotal, vat, total):
+def totals_mismatch_reason(subtotal, vat, total, exempt=0.0):
     """The warning shown when the three amounts contradict each other, with
     the actual figures in it so the user can see what to fix without
     reopening the document. Returns None when they agree (or when there
     isn't enough to check), so a correctly-read invoice stays clean — a
     figure that reconcile_totals derived and verified is not a problem and
-    must not raise a warning of its own."""
-    if subtotal is not None and vat is not None and not _vat_rate_ok(subtotal, vat):
-        expected = round(subtotal * VAT_RATE, 2)
+    must not raise a warning of its own.
+
+    exempt เป็นส่วนของยอดก่อนภาษีที่ได้รับยกเว้น VAT ซึ่งพิสูจน์มาแล้วจาก
+    ตัวเลขบนหน้านั้น (ดู _exempt_portion). ใบอัตราผสมที่อ่านถูกจะต้องไม่
+    ขึ้นเตือน เพราะการเตือนใบที่ถูกอยู่แล้วทำให้คนเลิกเชื่อคำเตือนทั้งระบบ"""
+    if subtotal is not None and vat is not None and not _vat_rate_ok(subtotal, vat, exempt):
+        base = subtotal - (exempt or 0.0)
+        expected = round(base * VAT_RATE, 2)
         return (f"⚠️ ยอดไม่สอดคล้องกัน: VAT ที่ระบุ ({_fmt_baht(vat)} บาท) ไม่ตรงกับ 7% "
                 f"ของยอดก่อนภาษี (ควรเป็น {_fmt_baht(expected)} บาท) — โปรดตรวจสอบ")
     if None not in (subtotal, vat, total) and not _amounts_balance(subtotal, vat, total):
@@ -1411,7 +1525,7 @@ def totals_mismatch_reason(subtotal, vat, total):
     return None
 
 
-def reconcile_totals(subtotal, vat, total):
+def reconcile_totals(subtotal, vat, total, numbers=None):
     """Cross-check ยอดก่อนภาษี / VAT / ยอดรวม against each other and repair
     one of them when the other two agree.
 
@@ -1428,8 +1542,15 @@ def reconcile_totals(subtotal, vat, total):
     correct 7% rate, so a guess can't quietly replace what the document
     actually says. Returns (subtotal, vat, total). A set it could not
     reconcile is returned untouched — totals_mismatch_reason then turns it
-    into the warning the user sees."""
-    if _amounts_balance(subtotal, vat, total) and _vat_rate_ok(subtotal, vat):
+    into the warning the user sees.
+
+    numbers คือตัวเลขทุกตัวบนหน้านั้น ส่งมาเพื่อให้รู้จักใบ VAT อัตราผสม
+    ซึ่งยอดบวกกันลงตัวแต่ VAT ไม่ใช่ 7% ของยอดก่อนภาษี — ใบพวกนี้อ่านถูก
+    แล้วและต้องคืนค่าเดิมทันที ห้ามสลับตำแหน่งหรือคำนวณทับ"""
+    if _amounts_balance(subtotal, vat, total) and (
+        _vat_rate_ok(subtotal, vat)
+        or _exempt_portion(subtotal, vat, numbers) is not None
+    ):
         return subtotal, vat, total
 
     # Before computing anything, consider that all three figures were read
@@ -1508,7 +1629,8 @@ def build_review_reasons(fields):
     # ใบย่อ has no subtotal/VAT to check against each other by law
     if fields.get("doc_type") != "ย่อ":
         mismatch = totals_mismatch_reason(
-            fields.get("subtotal"), fields.get("vat"), fields.get("total")
+            fields.get("subtotal"), fields.get("vat"), fields.get("total"),
+            fields.get("_vat_exempt") or 0.0,
         )
         if mismatch:
             reasons.append(mismatch)
@@ -1621,6 +1743,7 @@ def _extract_totals_block(text):
     skipped rather than treated as the end of the run; more than that and
     we've probably wandered into unrelated content, so the run stops."""
     lines = [l.strip() for l in text.splitlines()]
+    numbers = _page_numbers(text)
     n = len(lines)
     for start in range(n):
         labels = []
@@ -1679,7 +1802,7 @@ def _extract_totals_block(text):
         if len(values) > len(labels):
             for offset in (len(values) - len(labels), 0):
                 candidate = _pair_totals(labels, values[offset:offset + len(labels)])
-                if _totals_pairing_is_sound(candidate):
+                if _totals_pairing_is_sound(candidate, numbers):
                     return candidate
         # And the mirror: more labels than figures, because the box's last
         # row was emitted somewhere else. Confirmed live: a totals box of
@@ -1693,7 +1816,7 @@ def _extract_totals_block(text):
         if len(labels) > len(values):
             for candidate_labels in (labels[:len(values)], labels[-len(values):]):
                 candidate = _pair_totals(candidate_labels, values)
-                if _totals_pairing_is_sound(candidate):
+                if _totals_pairing_is_sound(candidate, numbers):
                     return candidate
     return {}
 
@@ -1721,6 +1844,7 @@ def _totals_from_number_run(text):
     per-section subtotal can also balance, the grand total is the bigger.
     """
     lines = [l.strip() for l in text.splitlines()]
+    numbers = _page_numbers(text)
     best = None
     run = []
     for line in lines + [""]:
@@ -1730,17 +1854,18 @@ def _totals_from_number_run(text):
                 run.append(val)
                 continue
         if len(run) >= _ARITH_SCAN_MIN_RUN:
-            found = _balanced_triple(run)
+            found = _balanced_triple(run, numbers)
             if found and (best is None or found[2] > best[2]):
                 best = found
         run = []
     return best
 
 
-def _balanced_triple(values):
+def _balanced_triple(values, numbers=None):
     """The one (subtotal, vat, total) among `values` that satisfies both
-    invariants, or None. Returns None when several do — an ambiguous run
-    is no better evidence than no run at all."""
+    invariants, or None. Returns None when several do and they cannot be
+    explained as one invoice — an ambiguous run is no better evidence than
+    no run at all."""
     seen = []
     for v in values:
         if v > 0 and not any(abs(v - o) < 0.005 for o in seen):
@@ -1748,12 +1873,23 @@ def _balanced_triple(values):
     hits = []
     for subtotal in seen:
         for vat in seen:
-            if not _vat_rate_ok(subtotal, vat):
+            if _exempt_portion(subtotal, vat, numbers) is None:
                 continue
             for total in seen:
                 if _amounts_balance(subtotal, vat, total):
                     hits.append((subtotal, vat, total))
-    return hits[0] if len(hits) == 1 else None
+    if len(hits) == 1:
+        return hits[0]
+    # ใบ VAT อัตราผสมให้มากกว่าหนึ่งคำตอบเสมอ และนั่นไม่ใช่ความกำกวม:
+    # แถวสรุปของกลุ่ม 7% บวกกันลงตัวในตัวมันเอง (195.33 + 13.67 = 209.00)
+    # และแถว TOTAL ของทั้งใบก็บวกกันลงตัวเช่นกัน (276.33 + 13.67 = 290.00)
+    # สองแถวนี้แยกจากกันได้ด้วยข้อเท็จจริงเดียว — VAT ของทั้งใบคือ VAT ของ
+    # กลุ่มที่เสียภาษี จึงเป็น "ตัวเดียวกัน" ส่วนยอดรวมของทั้งใบย่อมใหญ่กว่า
+    # ถ้าคำตอบที่ได้มา VAT ไม่ตรงกัน แปลว่าเป็นตัวเลขจากคนละใบ/คนละตาราง
+    # อันนั้นกำกวมจริงและต้องคืน None ตามเดิม
+    if hits and all(abs(h[1] - hits[0][1]) < 0.005 for h in hits):
+        return max(hits, key=lambda h: h[2])
+    return None
 
 
 def _pair_totals(labels, values):
@@ -1765,13 +1901,19 @@ def _pair_totals(labels, values):
     return result
 
 
-def _totals_pairing_is_sound(pairing):
+def _totals_pairing_is_sound(pairing, numbers=None):
     """Only trust a guessed alignment if the three amounts it produces add
-    up and carry a correct 7% rate — a wrong offset cannot fake both."""
+    up and carry a correct 7% rate — a wrong offset cannot fake both.
+
+    บนใบอัตราผสม "7% ของยอดก่อนภาษี" ใช้ไม่ได้ ที่ใช้แทนคือส่วนยกเว้นที่
+    พิสูจน์ได้จากตัวเลขบนหน้า ซึ่งยังเป็นเงื่อนไขสองชั้นเหมือนเดิม"""
     subtotal = _clean_number(pairing.get("subtotal"))
     vat = _clean_number(pairing.get("vat"))
     total = _clean_number(pairing.get("total"))
-    if _amounts_balance(subtotal, vat, total) and _vat_rate_ok(subtotal, vat):
+    if _amounts_balance(subtotal, vat, total) and (
+        _vat_rate_ok(subtotal, vat)
+        or _exempt_portion(subtotal, vat, numbers) is not None
+    ):
         return True
     # A box that prints its grand total apart from the rest yields a
     # pairing with no total in it at all, which the balance test can never
@@ -1806,11 +1948,20 @@ _DOC_INFO_BLOCK_KEYS = [
     # Invoice No.", "วันที่ / Invoice Date" — which the bare "เลขที่ / No."
     # form did not match, so the box's first label was invisible.
     ("doc_no", [r"เลขที่เอกสาร(?!อ้างอิง)", r"Document\s*No",
-                r"^เลขที่?\s*[/／]\s*(?:Tax\s*)?(?:Invoice|Doc(?:ument)?)?\s*No\.?\s*$"]),
+                r"^เลขที่?\s*[/／]\s*(?:Tax\s*)?(?:Invoice|Doc(?:ument)?)?\s*No\.?\s*$",
+                r"^เลขที่ใบเสร็จ\s*$", r"^Rece[ij]pt\s*N[og0]\.?\s*$"]),
     ("doc_date", [r"วันที่เอกสาร(?!อ้างอิง)", r"Document\s*Date",
-                  r"^วันที่?\s*[/／]\s*(?:Tax\s*)?(?:Invoice|Doc(?:ument)?)?\s*Date\.?\s*$"]),
+                  r"^วันที่?\s*[/／]\s*(?:Tax\s*)?(?:Invoice|Doc(?:ument)?)?\s*Date\.?\s*$",
+                  r"^วันที่\s*$", r"^Date\s*$"]),
     ("doc_ref_no", [r"เลขที่เอกสารอ้างอิง", r"Document\s*Ref"]),
     ("doc_ref_date", [r"วันที่เอกสารอ้างอิง", r"Date\s*of\s*Ref"]),
+    # A POS receipt heads its box with "แผ่นที่ / เลขที่ใบเสร็จ /
+    # พนักงานเก็บเงิน / วันที่" and OCR reads the column down, so these
+    # exist to keep the label run aligned with the value run the same way
+    # credit/salesman do. "N[og0]" because OCR read "Receipt No" as
+    # "Recejpt Ng".
+    ("page", [r"^แผ่นที่\s*$", r"^Sheet\s*$"]),
+    ("cashier", [r"^Cashier\s*$", r"^พนักงานเก็บเงิน\s*$"]),
     ("credit", [r"^เครดิต\s*[/／]?", r"^Credit\b"]),
     ("due_date", [r"วันครบกำ?า?หนด", r"Due\s*Date"]),
     ("po_no", [r"เลขที่ใบสั่งซื้อ", r"Purchase\s*Order\s*No", r"PO\.?\s*No"]),
@@ -1978,8 +2129,11 @@ def _doc_info_pairing_is_sound(pairing):
     """Reject a label/value alignment that produced something a document
     number and date plainly are not."""
     doc_no = pairing.get("doc_no")
-    if not doc_no or re.fullmatch(r"\d{10,}", doc_no):
-        return False  # a bare long number is a taxpayer ID, not a doc no.
+    if not doc_no or re.fullmatch(r"\d{13}", doc_no):
+        # Exactly 13 digits is a taxpayer ID, not a document number. The
+        # bound used to be 10-or-more, which also threw away a POS
+        # receipt's own 12-digit number.
+        return False
     if _parse_thai_date(doc_no):
         return False  # a date landed in the number's slot: misaligned by one
     if not re.search(r"\d", doc_no):
@@ -2040,19 +2194,34 @@ def extract_fields(text, ocr_confidence=None):
     # The three amounts are extracted independently above, each by its own
     # keyword search — cross-check them against each other before they get
     # recorded. See reconcile_totals.
-    subtotal, vat, total = reconcile_totals(subtotal, vat, total)
+    page_numbers = _page_numbers(text)
+    subtotal, vat, total = reconcile_totals(subtotal, vat, total, page_numbers)
 
-    # Nothing in the totals box could be paired with its label AND what the
-    # keyword searches came back with doesn't hang together — the reading
-    # is worthless either way. Only here, with nothing to lose, is the
-    # arithmetic scan allowed to speak: see _totals_from_number_run. A
-    # figure that WAS paired with its own label is never second-guessed,
-    # so an invoice whose printed amounts genuinely disagree still gets
-    # flagged for review rather than quietly rewritten.
-    if not totals_block and not (
+    # The three figures don't hang together, so this reading is wrong
+    # somewhere — whether it came from a label pairing or a keyword search
+    # makes no difference, a wrong answer is a wrong answer. Let the
+    # arithmetic scan speak: see _totals_from_number_run.
+    #
+    # Pairing with a label used to be treated as proof enough to block the
+    # scan. It isn't. Confirmed live on a Makro receipt: its totals row is
+    # labelled "ราคาสินค้า / ภาษี / รวม" — three words too generic to be
+    # keywords — so the block matched the ITEMS table's "มูลค่าสินค้า"
+    # heading instead and paired it with the first item row, filing a
+    # 356.00 receipt as 96.00 + 1.00 VAT. The scan had the right answer
+    # (332.71 + 23.29 = 356.00, and 23.29 is exactly 7%) and was ignored.
+    #
+    # What keeps this safe is the scan itself, not the guard: it demands a
+    # run of figures holding exactly ONE triple that satisfies both
+    # invariants at once. An invoice whose printed amounts genuinely
+    # disagree offers no such triple, so it stays flagged rather than
+    # being quietly rewritten.
+    if not (
         subtotal and vat and total
         and _amounts_balance(subtotal, vat, total)
-        and _vat_rate_ok(subtotal, vat)
+        and (
+            _vat_rate_ok(subtotal, vat)
+            or _exempt_portion(subtotal, vat, page_numbers) is not None
+        )
     ):
         scanned = _totals_from_number_run(text)
         if scanned:
@@ -2070,6 +2239,9 @@ def extract_fields(text, ocr_confidence=None):
         "total": total,
         "ocr_confidence": ocr_confidence,
         "_has_tax_invoice_marker": bool(re.search(TAXINV_MARKER, text)),
+        # ส่วนของยอดก่อนภาษีที่ได้รับยกเว้น VAT — 0.0 คือใบ 7% ธรรมดา
+        # None คือยอดที่อธิบายไม่ได้ ซึ่ง build_review_reasons จะเตือน
+        "_vat_exempt": _exempt_portion(subtotal, vat, page_numbers),
     }
     fields["doc_type"] = classify_doc_type(fields)
 

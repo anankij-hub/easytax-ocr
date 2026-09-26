@@ -2624,6 +2624,142 @@ REAL_PREMIERCLEAN_RAW_TEXT = """ใบเสร็จรับเงิน/ใ�
 วันที่ 31/1/2025
 """
 
+# A Makro POS receipt — the format that dominates the user's batch (15 of
+# 60 pages). Three separate defects, all of them silent.
+# (1) Its totals row is labelled "ราคาสินค้า / ภาษี / รวม" — three words
+#     far too generic to be keywords — so the totals block matched the
+#     ITEMS table's "มูลค่าสินค้า" heading instead and paired it with the
+#     first item row: a 356.00 receipt was filed as 96.00 + 1.00 VAT. The
+#     arithmetic scan HAD the right answer all along (332.71 + 23.29 =
+#     356.00, and 23.29 is exactly 7% of 332.71) but was locked out,
+#     because a figure paired with a label used to be treated as proof.
+# (2) A reissued receipt names the document it replaces — "เป็นการยกเลิก
+#     และออกใบกำกับภาษีฉบับใหม่ แทนฉบับเดิมเลขที่ 041030406649" — and that
+#     CANCELLED number was recorded as this receipt's own.
+# (3) The receipt's real number sits in a column-major header box
+#     ("แผ่นที่ / เลขที่ใบเสร็จ / พนักงานเก็บเงิน / วันที่" then their four
+#     values), which no document-box label matched; and once it did, the
+#     12-digit number was thrown away by a rule meant to reject 13-digit
+#     taxpayer IDs.
+REAL_MAKRO_RAW_TEXT = """บริษัท ซีพี เอ็กซ์ตร้า จำกัด (มหาชน)
+สำนักงานใหญ่ โทร. 020678999
+เลขประจำตัวผู้เสียภาษีอากร 0107567000414
+makro
+โปรดทราบ
+1 โปรดเก็บใบเสร็จไว้เป็นหลักฐาน
+2. การติดต่อกับทางบริษัท โปรดนำใบเสร็จมาทุกครั้ง
+3 บริษัทจะรับคืนสินค้าภายใน 7 วัน
+ยกเว้นของสดรับคืนภายในวันที่ซื้อ
+4 สินค้าที่รับคืนต้องอยู่ในสภาพเดิม
+เป็นการยกเลิกและออกใบกำกับภาษีฉบับใหม่ แทนฉบับเดิมเลขที่ 041030406649
+สาขาที่ 00042 สาขาเชียงใหม่ 2 : 191 หมู่ที่ 7 ต.แม่เหียะ
+7
+อ.เมืองเชียงใหม่ จ.เชียงใหม่ 50100
+โทร.053-447799 โทรสาร 053-447804-5
+POS ID#
+คณะบริหารธุรกิจ มหาวิทยาลัยเชียงใหม่ สำนักงานใหญ่
+ใบเสร็จรับเงิน/ใบกำกับภาษี
+239 ถ.ห้วยแก้ว
+Customer Name
+ต.สุเทพ อ.เมืองเชียงใหม่
+ชื่อสมาชิก
+จ.เชียงใหม่ 50200
+Customer No.
+เลขที่สมาชิก
+041 999999
+TAX ID# 0994000423179
+Time
+17:16
+เวลา
+แผ่นที่
+Recejpt Ng
+เลขที่ใบเสร็จ
+Cashier
+พนักงานเก็บเงิน
+Date
+วันที่
+1
+041501408013
+111 3
+22-07-2025
+QUANTITY OR
+ARTICLE
+WEIGHT
+NUMBER
+รหัสสินค้า
+จำนวน/นํ้าหนัก
+1 8852008300017 โคอะลามาร์ช ไส้ช็อกโกแลต 370x6
+ARTICLE DESCRIPTION
+รายการสินค้า
+UNIT
+PACKS
+PACK
+PRICE
+VAT
+CODE
+VALUE INCLUDED VAT
+หน่วยบรรจุ
+ราคา(บาท) รหัส ภ.พ.
+มูลค่าสินค้า
+รวม VAT (บาท)
+6 ชร
+96.00
+2
+96.00
+1
+8851019910307 ป๊อกกี้ รสช็อกโกแลต200X10
+10 ชร
+80.00
+2
+80.00
+1 18859400301922 ซันซุเยลลี่พืช&ลิ้นจี่ 960X6
+6 หอ
+129.00
+2
+129.00
+1
+8850425007281 ยูโร่ช็อกโกพาย ไส้แยมราส 170X12
+12 ชร
+51.00
+2
+51.00
+356.00
+ชำระโดย
+TID: 041003
+QR KBANK
+TRACE : KB000001834687
+BATCH : CRP0000235
+REF NO: APIC17531793840131TT
+จำนวน
+ชิ้น
+รหัส ภ.พ.%
+ราคาสินค้า
+LEGAL AMOUNT
+ภาษี
+รวม
+รวมเงิน
+4
+2 7.00
+TOTAL
+332.71
+23.29
+356.00
+CASH
+356.00
+356.00
+332.71
+23.29
+356.00
+ทอน
+0.00-
+ยอดเงินชำระ
+makro
+ทาทา เชียงใหม่
+บุนจา
+356.00
+"""
+
+
 
 
 
@@ -4111,6 +4247,182 @@ def main():
     all_ok &= check(
         "the next party's name does",
         extractor._in_buyer_block(customer_box, 7) is False,
+    )
+
+    # regression: a Makro POS receipt (see REAL_MAKRO_RAW_TEXT)
+    fields32 = extractor.extract_fields(REAL_MAKRO_RAW_TEXT, ocr_confidence=90.0)
+    print()
+    print("--- Real Makro OCR text fields ---")
+    for k, v in fields32.items():
+        print(f"  {k}: {v}")
+    all_ok &= check(
+        "real makro: subtotal is the pre-VAT figure, not an item's price",
+        fields32["subtotal"] == 332.71,
+    )
+    all_ok &= check("real makro: vat (not the quantity 1)", fields32["vat"] == 23.29)
+    all_ok &= check("real makro: total", fields32["total"] == 356.00)
+    all_ok &= check("real makro: the three amounts agree", fields32["needs_review"] is False)
+    all_ok &= check(
+        "real makro: invoice_no is this receipt's, not the cancelled one it replaces",
+        fields32["invoice_no"] == "041501408013",
+    )
+    all_ok &= check("real makro: date", fields32["invoice_date_iso"] == "2025-07-22")
+    all_ok &= check("real makro: tax id", fields32["seller_tax_id"] == "0107567000414")
+    all_ok &= check(
+        "real makro: seller",
+        fields32["seller_name"] == "บริษัท ซีพี เอ็กซ์ตร้า จำกัด (มหาชน)",
+    )
+
+    # the three fixes, checked on their own
+    all_ok &= check(
+        "the number of a cancelled document is not this document's",
+        extractor.extract_invoice_no(
+            "เป็นการยกเลิกและออกใบกำกับภาษีฉบับใหม่ แทนฉบับเดิมเลขที่ 041030406649\n"
+        ) != "041030406649",
+    )
+    all_ok &= check(
+        "a 12-digit POS receipt number is a valid document number",
+        extractor._doc_info_pairing_is_sound({"doc_no": "041501408013"}),
+    )
+    all_ok &= check(
+        "a 13-digit taxpayer ID still is not",
+        extractor._doc_info_pairing_is_sound({"doc_no": "0505567001234"}) is False,
+    )
+    all_ok &= check(
+        "'เลขที่ใบเสร็จ' is a document-number label",
+        extractor._classify_doc_info_label("เลขที่ใบเสร็จ") == "doc_no",
+    )
+    # the guard that keeps the arithmetic scan honest: a page whose printed
+    # amounts genuinely disagree offers no balanced triple, so it stays flagged
+    all_ok &= check(
+        "printed amounts that disagree are STILL flagged, not rewritten",
+        extractor.extract_fields(
+            "บริษัท ทดสอบ จำกัด\nเลขประจำตัวผู้เสียภาษี 0105567123469\n"
+            "ใบกำกับภาษี\nชื่อลูกค้า : บริษัท เอ จำกัด\n"
+            "เลขที่ใบกำกับภาษี IV6800107-054\nวันที่ 07/01/68\n"
+            "ราคารวมสินค้า (บาท) 1,900.00\nภาษีมูลค่าเพิ่ม (VAT) 7% 140.00\n"
+            "รวมทั้งสิ้น 2,040.00\n", ocr_confidence=92.0,
+        )["needs_review"] is True,
+    )
+
+    # ---- ประโยค "ยกเลิกใบเดิม" ต้องไม่ถูกขุดเอาเลขที่/วันที่ ----
+    # ประโยคด้านล่างคัดมาจากใบจริง B2S หน้า 58 ของกอง "ใบจริงอันใหม่.pdf"
+    # ใบนี้ออกแทนใบย่อที่ถูกยกเลิก จึงประกาศเลขที่และวันที่ของใบเก่าไว้ใต้
+    # หัวเรื่อง. Makro เขียนว่า "แทนฉบับเดิมเลขที่ ..." ซึ่งการ์ดเดิมจับได้
+    # ด้วย lookbehind "เดิม" แต่ B2S เขียนว่า "ยกเลิกใบกำกับภาษีอย่างย่อ
+    # เลขที่ ..." ไม่มีคำว่าเดิมเลย จึงหลุด — เลขที่ยกเลิกไปโผล่เป็นเลขที่
+    # ของใบนี้ ซึ่งถ้ายื่น ภ.พ.30 ไปคือยื่นผิดใบ
+    # ใบนี้ใช้ป้าย "เลขที่" เปล่า ๆ ไม่ใช่ "เลขที่ใบกำกับภาษี" ประโยคยกเลิก
+    # จึงแข่งกับกล่องหัวเอกสารที่ลำดับความสำคัญเดียวกัน และชนะเพราะอยู่ก่อน
+    cancelled_clause = """บริษัท บีทูเอส จำกัด สาขาโรบินสันเชียงใหม่ สาขาที่ 00053
+เลขประจำตัวผู้เสียภาษีอากร : 0105538032743
+ใบเสร็จรับเงิน/ใบกำกับภาษี
+เป็นการยกเลิกใบกำกับภาษีอย่างย่อเลขที่ 103-107827 วันที่ 22 กรกฎาคม 2568 และออกใบกำกับภาษีมีอิเล็กทรอนิกส์ใหม่แทน
+เลขที่
+วันที่
+50051072510000079
+23 กรกฎาคม 2568
+"""
+    all_ok &= check(
+        "B2S wording: the cancelled document's number is not taken",
+        extractor.extract_invoice_no(cancelled_clause) == "50051072510000079",
+    )
+    all_ok &= check(
+        "B2S wording: the cancelled document's date is not taken either",
+        extractor.extract_date(cancelled_clause)[1] == "2025-07-23",
+    )
+
+    # ---- "เลขที่" ในที่อยู่คือบ้านเลขที่ ไม่ใช่เลขที่เอกสาร ----
+    # กับดักตัวจริงของใบ B2S หน้า 58: ที่อยู่ผู้ขายขึ้นต้นด้วย "เลขที่ 9
+    # หมู่ 3 ..." และอยู่เหนือกล่องหัวเอกสาร ระบบจึงคืนรหัสไปรษณีย์ของ
+    # ผู้ขาย (50200) มาเป็นเลขที่ใบกำกับภาษี — เลขที่ผิดสนิทและดูไม่ออก
+    # ด้วยตาเพราะเป็นตัวเลขห้าหลักที่หน้าตาเหมือนเลขเอกสารสั้น ๆ
+    address_trap = """B2S
+บริษัท บีทูเอส จำกัด สาขาโรบินสันเชียงใหม่ สาขาที่ 00053
+เลขที่ 9 หมู่ 3 ตำบลสุเทพ อำเภอเมืองเชียงใหม่ จังหวัดเชียงใหม่ 50200
+เลขประจำตัวผู้เสียภาษีอากร : 0105538032743
+เลขที่
+วันที่
+50051072510000079
+22 กรกฎาคม 2568
+ใบเสร็จรับเงิน/ใบกำกับภาษี
+ที่อยู่ เลขที่ 239 ถนน ห้วยแก้ว ตำบล สุเทพ อำเภอ เมืองเชียงใหม่ จังหวัด เชียงใหม่ 50200
+"""
+    all_ok &= check(
+        "a street address's house number is not the document number",
+        extractor.extract_invoice_no(address_trap) == "50051072510000079",
+    )
+    all_ok &= check(
+        "an address line is recognised by two or more locality words",
+        extractor._looks_like_address(" 9 หมู่ 3 ตำบลสุเทพ อำเภอเมืองเชียงใหม่"),
+    )
+    all_ok &= check(
+        "a plain document-number line is not mistaken for an address",
+        not extractor._looks_like_address(" 50051072510000079"),
+    )
+    # คำเดียวไม่พอ — "เลขที่เอกสาร ... ถนน" อาจบังเอิญเจอได้ในใบที่ OCR
+    # เอาบรรทัดมาต่อกัน จึงบังคับสองคำขึ้นไป
+    all_ok &= check(
+        "one locality word alone is not enough to call a line an address",
+        not extractor._looks_like_address(" INV-2026-001 ถนน"),
+    )
+
+    # ---- VAT อัตราผสม (ของยกเว้นภาษีปนกับของ 7%) ----
+    # ตัวเลขชุดนี้มาจากใบจริง: Makro หน้า 9 ของกอง "ใบจริงอันใหม่.pdf"
+    #   แถว 1  0.00%   81.00                  0.00    81.00
+    #   แถว 2  7.00%  195.33                 13.67   209.00
+    #   TOTAL         276.33                 13.67   290.00
+    # 276.33 + 13.67 = 290.00 ลงตัวเป๊ะ แต่ 13.67 เป็นเพียง 4.95% ของ
+    # 276.33 เพราะกล้วยหอมในบิลเป็นของยกเว้นภาษี ใบนี้อ่านถูกทุกตัวเลข
+    # แต่ระบบเดิมขึ้นเตือนทุกครั้ง — การเตือนใบที่ถูกอยู่แล้วอันตรายพอ ๆ
+    # กับไม่เตือนใบที่ผิด เพราะทำให้คนเลิกอ่านคำเตือน
+    mixed_numbers = {81.00, 195.33, 209.00, 276.33, 13.67, 290.00, 51.00,
+                     158.00, 87.00, 296.00, 6.00, 29.00}
+    all_ok &= check(
+        "mixed-rate: the exempt portion is found and it is the printed 81.00",
+        extractor._exempt_portion(276.33, 13.67, mixed_numbers) == 81.00,
+    )
+    all_ok &= check(
+        "mixed-rate: a correctly-read mixed invoice raises no warning",
+        extractor.totals_mismatch_reason(276.33, 13.67, 290.00, 81.00) is None,
+    )
+    all_ok &= check(
+        "mixed-rate: reconcile leaves a correct mixed invoice untouched",
+        extractor.reconcile_totals(276.33, 13.67, 290.00, mixed_numbers)
+        == (276.33, 13.67, 290.00),
+    )
+    # ถ้าไม่มีหลักฐานบนกระดาษว่าใบนี้ผสม ก็ต้องไม่ยอมรับ — ข้อนี้คือตัวกันเดา
+    all_ok &= check(
+        "mixed-rate: no exempt split is invented when the page has no such numbers",
+        extractor._exempt_portion(276.33, 13.67, {276.33, 13.67, 290.00}) is None,
+    )
+    all_ok &= check(
+        "mixed-rate: a genuinely wrong pair is still rejected",
+        extractor._exempt_portion(1000.00, 500.00, mixed_numbers) is None,
+    )
+    all_ok &= check(
+        "mixed-rate: an unexplained VAT is still flagged",
+        extractor.totals_mismatch_reason(1000.00, 500.00, 1500.00) is not None,
+    )
+    # แถวสรุปของกลุ่ม 7% (195.33/13.67/209.00) ก็บวกลงตัวในตัวเอง การสแกน
+    # ต้องเลือกแถว TOTAL ของทั้งใบ ไม่ใช่แถวของกลุ่มเดียว
+    all_ok &= check(
+        "mixed-rate: the arithmetic scan picks the grand total row, not the 7% section",
+        extractor._balanced_triple(
+            [81.00, 195.33, 276.33, 0.00, 13.67, 13.67, 81.00, 209.00, 290.00],
+            mixed_numbers,
+        ) == (276.33, 13.67, 290.00),
+    )
+    # ...แต่ตัวเลขจากคนละใบที่บังเอิญบวกลงตัวทั้งคู่ ยังต้องถือว่ากำกวม
+    all_ok &= check(
+        "two unrelated balanced triples are still ambiguous",
+        extractor._balanced_triple([100.00, 7.00, 107.00, 200.00, 14.00, 214.00])
+        is None,
+    )
+    # ใบ 7% ธรรมดาต้องไม่เปลี่ยนพฤติกรรม แม้หน้านั้นจะมีตัวเลขเต็มไปหมด
+    all_ok &= check(
+        "an ordinary 7% invoice still reports exempt = 0",
+        extractor._exempt_portion(332.71, 23.29, mixed_numbers) == 0.0,
     )
 
     # multi-invoice split
