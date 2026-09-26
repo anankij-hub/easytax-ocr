@@ -369,6 +369,24 @@ def _is_table_column_header(lines, i):
     return False
 
 
+_CURRENCY_WORD_AHEAD_RE = re.compile(r"^(?:THB|Baht|BHT)", re.IGNORECASE)
+
+
+def _glued_to_letters(text, m):
+    """ตัวเลขนี้เป็นชิ้นส่วนของรหัสที่ปนตัวอักษรอยู่หรือเปล่า
+
+    "114100" ใน "QRPP 114100XXXXXX6" ไม่ใช่จำนวนเงิน แต่ NUM_RE ตัดมาให้
+    ได้หน้าตาเหมือนจำนวนเงินทุกประการ สิ่งที่บอกความต่างคือตัวอักษรที่
+    ติดกันโดยไม่มีช่องว่างคั่น"""
+    before = text[m.start() - 1] if m.start() > 0 else ""
+    after = text[m.end():m.end() + 4]
+    if before.isascii() and before.isalpha():
+        return True
+    if after[:1].isascii() and after[:1].isalpha():
+        return not _CURRENCY_WORD_AHEAD_RE.match(after)
+    return False
+
+
 def _best_match_on_line(rest, value_pattern, require_digit=False, max_start=None):
     """Pick the value on the rest-of-line after a keyword. For numeric
     patterns, Thai invoices usually print the actual amount at the end of
@@ -403,6 +421,12 @@ def _best_match_on_line(rest, value_pattern, require_digit=False, max_start=None
         # บรรทัดนั้นและไม่มองหาต่อ — ยืนยันจากใบ B2S: พอปัดเลขบาร์โค้ดทิ้ง
         # ตอนแปลง ยอดรวมกลายเป็นว่างเปล่า แทนที่จะไปเจอ 52.00 ที่อยู่ถัดไป
         filtered = [mm for mm in filtered if _clean_number(mm.group(0)) is not None]
+        # ตัวเลขที่ติดอยู่กลางโค้ดตัวอักษรไม่ใช่จำนวนเงิน — มันเป็นชิ้นส่วน
+        # ของรหัสอ้างอิง ยืนยันจากใบ B2S: บรรทัดวิธีชำระเงินคือ
+        # "QRPP 114100XXXXXX6" (เลขบัตรที่ถูกปิดบางส่วน) แล้ว 114100 ถูก
+        # เก็บเป็น VAT ของใบ 52 บาท. เช็คเฉพาะตัวอักษรอังกฤษ เพราะคำไทย
+        # ที่ติดตัวเลขเป็นหน่วยเงินปกติ ("52.00บาท")
+        filtered = [mm for mm in filtered if not _glued_to_letters(rest, mm)]
         if not filtered:
             return None
         return filtered[-1].group(0).strip()
@@ -1907,7 +1931,28 @@ def _totals_from_number_run(text):
             if found and (best is None or found[2] > best[2]):
                 best = found
         run = []
-    return best
+    if best is not None:
+        return best
+
+    # ไม่มีแถวไหนเก็บครบทั้งสามตัว — ขยายไปทั้งหน้า
+    #
+    # ยืนยันจากใบจริง B2S: ค่าทั้งสี่ของกล่องยอดถูกตัดขาดจากป้ายด้วยแถว
+    # ":" สี่บรรทัด แล้วถูกสลับฟันปลากับคอลัมน์วิธีชำระเงิน กลายเป็น
+    #     0.00 / 52.00 / ชำระโดย / 0.00 / QRPP... / 52.00 / 52.00 /
+    #     Change / 0.00 / 48.60 / 3.40
+    # ไม่มีชุดสามตัวติดกันชุดไหนที่ใช้ได้เลย ทั้งที่ 48.60 + 3.40 = 52.00
+    # อยู่บนหน้านั้นครบทุกตัว แค่ไม่ได้อยู่ติดกัน
+    #
+    # ที่ทำแบบนี้ได้โดยไม่ใช่การเดา เพราะเงื่อนไขยังเป็นสมการสองชั้นเหมือน
+    # เดิม และยังบังคับว่าต้องมีคำตอบเดียว หน้านี้มีตัวเลข 20 ตัว (รวม
+    # รหัสไปรษณีย์ ปี พ.ศ. เลขบาร์โค้ดที่ตัดทิ้งไปแล้ว) และมีชุดเดียว
+    # เท่านั้นที่ผ่านทั้งสองสมการ ยิ่งตัวเลขบนหน้าเยอะ โอกาสเจอชุดที่สอง
+    # ยิ่งมาก ซึ่งจะทำให้คืน None แล้วไปจบที่ "ให้คนตรวจ" — ผิดพลาดไป
+    # ในทางที่ปลอดภัย ไม่ใช่ทางที่กรอกเลขมั่ว
+    #
+    # วางไว้หลังสุดเพราะตัวเลขที่อยู่ติดกันเป็นหลักฐานที่ดีกว่า: มันบอกว่า
+    # ทั้งสามตัวมาจากกล่องเดียวกันบนกระดาษ
+    return _balanced_triple(sorted(numbers), numbers)
 
 
 def _balanced_triple(values, numbers=None):
