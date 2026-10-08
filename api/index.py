@@ -13,6 +13,11 @@ Differences from the local/Tesseract version:
     uploads/ folder.
   - extractor.py (field extraction / classification / review-flagging)
     is untouched — it only depends on plain OCR text, not the engine.
+
+Auth: the browser signs in with Supabase Auth (supabase-js) and sends the
+access token as "Authorization: Bearer <token>". Every /api route except
+/api/health and /api/config verifies it against Supabase and scopes all
+queries to that user's user_id.
 """
 import os
 import io
@@ -22,7 +27,8 @@ import datetime
 import sys
 
 import psycopg2
-from flask import Flask, request, jsonify, Response, send_file
+import requests
+from flask import Flask, request, jsonify, Response, send_file, g
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -35,6 +41,9 @@ app = Flask(__name__)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "static")
 
+SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or ""
+
 _db_ready = False
 
 
@@ -43,6 +52,42 @@ def ensure_db():
     if not _db_ready:
         db.init_db()
         _db_ready = True
+
+
+# ------------------------------------------------------------------ auth --
+PUBLIC_API_PATHS = {"/api/health", "/api/config"}
+
+
+def verify_token(token):
+    """Ask Supabase who owns this access token. Checked on every request
+    (no caching) so a token stops working the moment its session is signed
+    out, rather than staying valid until the JWT expires."""
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    return r.json().get("id") or None
+
+
+@app.before_request
+def require_login():
+    if not request.path.startswith("/api/") or request.path in PUBLIC_API_PATHS:
+        return None
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:].strip() if auth.startswith("Bearer ") else ""
+    user_id = verify_token(token) if token else None
+    if not user_id:
+        return jsonify({"error": "กรุณาเข้าสู่ระบบ"}), 401
+    g.user_id = user_id
+    return None
 
 
 def month_key(iso_date):
@@ -70,10 +115,17 @@ def invoice_row_to_dict(row, include_file_flag=True):
 # ---------------------------------------------------------------- static --
 @app.route("/")
 def index():
-    ensure_db()
     path = os.path.join(STATIC_DIR, "index.html")
     with open(path, "r", encoding="utf-8") as f:
         return Response(f.read(), mimetype="text/html")
+
+
+@app.route("/api/config")
+def public_config():
+    """Public Supabase settings the browser needs to run sign-in/sign-up.
+    The anon key is designed to be public; the tables have RLS enabled so
+    it can't be used to read them directly."""
+    return jsonify({"supabase_url": SUPABASE_URL, "supabase_anon_key": SUPABASE_ANON_KEY})
 
 
 @app.route("/api/health")
@@ -86,6 +138,8 @@ def health():
         "index_html_exists": os.path.isfile(os.path.join(STATIC_DIR, "index.html")),
         "database_url_set": bool(os.environ.get("DATABASE_URL")),
         "google_vision_api_key_set": bool(os.environ.get("GOOGLE_VISION_API_KEY")),
+        "supabase_url_set": bool(SUPABASE_URL),
+        "supabase_anon_key_set": bool(SUPABASE_ANON_KEY),
     }
     try:
         ensure_db()
@@ -99,9 +153,10 @@ def health():
 @app.route("/api/clients", methods=["GET"])
 def list_clients():
     ensure_db()
+    db.ensure_default_client(g.user_id)
     conn = db.get_conn()
     with conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM clients ORDER BY name")
+        cur.execute("SELECT id, name, created_at FROM clients WHERE user_id = %s ORDER BY name", (g.user_id,))
         rows = cur.fetchall()
     conn.close()
     out = []
@@ -123,7 +178,9 @@ def create_client():
     conn = db.get_conn()
     try:
         with conn, conn.cursor() as cur:
-            cur.execute("INSERT INTO clients (name) VALUES (%s) RETURNING id", (name,))
+            cur.execute(
+                "INSERT INTO clients (user_id, name) VALUES (%s, %s) RETURNING id", (g.user_id, name)
+            )
             client_id = cur.fetchone()["id"]
     except Exception as e:
         conn.close()
@@ -141,9 +198,10 @@ def dashboard():
     with conn, conn.cursor() as cur:
         cols = "id, client_id, doc_type, vat, total, invoice_date, invoice_no, seller_name, needs_review, created_at"
         if client_id != "all":
-            cur.execute(f"SELECT {cols} FROM invoices WHERE client_id = %s", (int(client_id),))
+            cur.execute(f"SELECT {cols} FROM invoices WHERE user_id = %s AND client_id = %s",
+                        (g.user_id, int(client_id)))
         else:
-            cur.execute(f"SELECT {cols} FROM invoices")
+            cur.execute(f"SELECT {cols} FROM invoices WHERE user_id = %s", (g.user_id,))
         rows = cur.fetchall()
     conn.close()
 
@@ -190,8 +248,8 @@ def list_invoices():
     q = (request.args.get("q") or "").strip()
     status = (request.args.get("status") or "").strip()
 
-    where = []
-    params = []
+    where = ["user_id = %s"]
+    params = [g.user_id]
     if client_id != "all":
         where.append("client_id = %s")
         params.append(int(client_id))
@@ -201,7 +259,7 @@ def list_invoices():
         where.append("(seller_name ILIKE %s OR invoice_no ILIKE %s OR invoice_date ILIKE %s OR seller_tax_id ILIKE %s)")
         like = f"%{q}%"
         params += [like, like, like, like]
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    where_sql = "WHERE " + " AND ".join(where)
 
     cols = ("id, client_id, filename, doc_type, invoice_no, invoice_date, invoice_date_raw, "
             "seller_name, seller_tax_id, buyer_name, subtotal, vat, total, needs_review, "
@@ -222,8 +280,9 @@ def get_invoice(invoice_id):
         cur.execute(
             "SELECT id, client_id, filename, doc_type, invoice_no, invoice_date, invoice_date_raw, "
             "seller_name, seller_tax_id, buyer_name, subtotal, vat, total, needs_review, review_reason, "
-            "ocr_confidence, file_mime, line_items, raw_text, created_at FROM invoices WHERE id = %s",
-            (invoice_id,),
+            "ocr_confidence, file_mime, line_items, raw_text, created_at FROM invoices "
+            "WHERE id = %s AND user_id = %s",
+            (invoice_id, g.user_id),
         )
         row = cur.fetchone()
     conn.close()
@@ -237,7 +296,10 @@ def get_invoice_file(invoice_id):
     ensure_db()
     conn = db.get_conn()
     with conn, conn.cursor() as cur:
-        cur.execute("SELECT file_data, file_mime, filename FROM invoices WHERE id = %s", (invoice_id,))
+        cur.execute(
+            "SELECT file_data, file_mime, filename FROM invoices WHERE id = %s AND user_id = %s",
+            (invoice_id, g.user_id),
+        )
         row = cur.fetchone()
     conn.close()
     if not row or not row["file_data"]:
@@ -266,18 +328,20 @@ def update_invoice(invoice_id):
     set_sql = ", ".join(f"{k} = %s" for k in fields)
     conn = db.get_conn()
     with conn, conn.cursor() as cur:
-        cur.execute(f"UPDATE invoices SET {set_sql} WHERE id = %s", list(fields.values()) + [invoice_id])
+        cur.execute(f"UPDATE invoices SET {set_sql} WHERE id = %s AND user_id = %s",
+                    list(fields.values()) + [invoice_id, g.user_id])
         cur.execute(
             "SELECT id, client_id, filename, doc_type, invoice_no, invoice_date, invoice_date_raw, "
             "seller_name, seller_tax_id, buyer_name, subtotal, vat, total, needs_review, review_reason, "
-            "ocr_confidence, file_mime, line_items, created_at FROM invoices WHERE id = %s",
-            (invoice_id,),
+            "ocr_confidence, file_mime, line_items, created_at FROM invoices WHERE id = %s AND user_id = %s",
+            (invoice_id, g.user_id),
         )
         row = cur.fetchone()
     conn.close()
-    if row:
-        db.log_activity(row["client_id"], invoice_id, "edit", json.dumps(list(fields.keys()), ensure_ascii=False))
-    return jsonify(invoice_row_to_dict(row) if row else {})
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    db.log_activity(g.user_id, row["client_id"], invoice_id, "edit", json.dumps(list(fields.keys()), ensure_ascii=False))
+    return jsonify(invoice_row_to_dict(row))
 
 
 @app.route("/api/invoices/<int:invoice_id>", methods=["DELETE"])
@@ -285,12 +349,14 @@ def delete_invoice(invoice_id):
     ensure_db()
     conn = db.get_conn()
     with conn, conn.cursor() as cur:
-        cur.execute("SELECT client_id, filename FROM invoices WHERE id = %s", (invoice_id,))
+        cur.execute("SELECT client_id, filename FROM invoices WHERE id = %s AND user_id = %s",
+                    (invoice_id, g.user_id))
         row = cur.fetchone()
-        cur.execute("DELETE FROM invoices WHERE id = %s", (invoice_id,))
+        cur.execute("DELETE FROM invoices WHERE id = %s AND user_id = %s", (invoice_id, g.user_id))
     conn.close()
-    if row:
-        db.log_activity(row["client_id"], invoice_id, "delete", row["filename"])
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    db.log_activity(g.user_id, row["client_id"], invoice_id, "delete", row["filename"])
     return jsonify({"deleted": invoice_id})
 
 
@@ -301,11 +367,21 @@ def upload():
     client_id = request.form.get("client_id")
     if not client_id:
         return jsonify({"error": "client_id is required"}), 400
-    client_id = int(client_id)
+    try:
+        client_id = int(client_id)
+    except ValueError:
+        return jsonify({"error": "client_id is invalid"}), 400
+
+    conn = db.get_conn()
+    with conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM clients WHERE id = %s AND user_id = %s", (client_id, g.user_id))
+        owns_client = cur.fetchone() is not None
+    if not owns_client:
+        conn.close()
+        return jsonify({"error": "ไม่พบลูกค้านี้ในบัญชีของคุณ"}), 404
 
     files = request.files.getlist("files")
     results = []
-    conn = db.get_conn()
     for f in files:
         if not f or not f.filename:
             continue
@@ -331,13 +407,13 @@ def upload():
                     file_data = file_bytes if (page["source_page"] == 1 and i == 0) else None
                     cur.execute(
                         """INSERT INTO invoices
-                        (client_id, filename, doc_type, invoice_no, invoice_date, invoice_date_raw,
+                        (user_id, client_id, filename, doc_type, invoice_no, invoice_date, invoice_date_raw,
                          seller_name, seller_tax_id, buyer_name, subtotal, vat, total,
                          needs_review, review_reason, ocr_confidence, raw_text, file_data, file_mime,
                          line_items)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                         (
-                            client_id, filename, fields["doc_type"], fields["invoice_no"],
+                            g.user_id, client_id, filename, fields["doc_type"], fields["invoice_no"],
                             fields["invoice_date_iso"], fields["invoice_date_raw"],
                             fields["seller_name"], fields["seller_tax_id"], fields["buyer_name"],
                             fields["subtotal"], fields["vat"], fields["total"],
@@ -352,7 +428,7 @@ def upload():
         results.append({"filename": filename, "status": "ok", "invoices_created": saved_count, "pages": len(pages)})
 
     conn.close()
-    db.log_activity(client_id, None, "upload", json.dumps(results, ensure_ascii=False))
+    db.log_activity(g.user_id, client_id, None, "upload", json.dumps(results, ensure_ascii=False))
     return jsonify({"results": results})
 
 
@@ -365,11 +441,15 @@ def activity():
     with conn, conn.cursor() as cur:
         if client_id != "all":
             cur.execute(
-                "SELECT * FROM activity_log WHERE client_id = %s ORDER BY created_at DESC LIMIT 200",
-                (int(client_id),),
+                "SELECT * FROM activity_log WHERE user_id = %s AND client_id = %s "
+                "ORDER BY created_at DESC LIMIT 200",
+                (g.user_id, int(client_id)),
             )
         else:
-            cur.execute("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 200")
+            cur.execute(
+                "SELECT * FROM activity_log WHERE user_id = %s ORDER BY created_at DESC LIMIT 200",
+                (g.user_id,),
+            )
         rows = cur.fetchall()
     conn.close()
     out = []
@@ -388,8 +468,8 @@ def export_csv():
     client_id = request.args.get("client_id", "all")
     scope = request.args.get("scope", "all")
 
-    where = []
-    params = []
+    where = ["user_id = %s"]
+    params = [g.user_id]
     if client_id != "all":
         where.append("client_id = %s")
         params.append(int(client_id))
@@ -402,7 +482,7 @@ def export_csv():
         where.append("doc_type = 'เต็มรูป'")
     elif scope == "review":
         where.append("needs_review = true")
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    where_sql = "WHERE " + " AND ".join(where)
 
     fieldnames = [
         "id", "filename", "doc_type", "seller_name", "seller_tax_id", "buyer_name",
@@ -423,7 +503,7 @@ def export_csv():
         writer.writerow(dict(r))
     body = "﻿" + buf.getvalue()  # BOM so Excel shows Thai correctly
 
-    db.log_activity(None if client_id == "all" else int(client_id), None, "export", scope)
+    db.log_activity(g.user_id, None if client_id == "all" else int(client_id), None, "export", scope)
     return Response(
         body, mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="easytax_export_{scope}.csv"'},

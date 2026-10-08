@@ -9,6 +9,9 @@ Unlike the local (SQLite) version, this one:
 
 Set the DATABASE_URL environment variable, e.g.:
   postgresql://user:password@host/dbname?sslmode=require
+
+Every row carries a user_id (the Supabase Auth user's UUID) so each account
+only ever sees its own clients, invoices and activity.
 """
 import os
 import json
@@ -19,7 +22,8 @@ import psycopg2.extras
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS clients (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
+    user_id UUID,
+    name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -55,6 +59,22 @@ CREATE TABLE IF NOT EXISTS activity_log (
     detail TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- per-user data isolation (also migrates databases created before login existed)
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS user_id UUID;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS user_id UUID;
+ALTER TABLE activity_log ADD COLUMN IF NOT EXISTS user_id UUID;
+ALTER TABLE clients DROP CONSTRAINT IF EXISTS clients_name_key;
+CREATE UNIQUE INDEX IF NOT EXISTS clients_user_name_key ON clients (user_id, name);
+CREATE INDEX IF NOT EXISTS invoices_user_id_idx ON invoices (user_id);
+CREATE INDEX IF NOT EXISTS activity_log_user_id_idx ON activity_log (user_id);
+
+-- The anon key is public (the browser needs it for Supabase Auth). With RLS
+-- on and no policies, Supabase's auto REST API can't read these tables;
+-- this app's own connection (the table owner) is unaffected.
+ALTER TABLE clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE activity_log ENABLE ROW LEVEL SECURITY;
 """
 
 
@@ -73,10 +93,18 @@ def init_db():
     conn = get_conn()
     with conn, conn.cursor() as cur:
         cur.execute(SCHEMA)
-        cur.execute("SELECT COUNT(*) AS c FROM clients")
-        if cur.fetchone()["c"] == 0:
+    conn.close()
+
+
+def ensure_default_client(user_id):
+    """Give a brand-new account one client to upload into."""
+    conn = get_conn()
+    with conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM clients WHERE user_id = %s LIMIT 1", (user_id,))
+        if not cur.fetchone():
             cur.execute(
-                "INSERT INTO clients (name) VALUES (%s)", ("ลูกค้าทั่วไป",)
+                "INSERT INTO clients (user_id, name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (user_id, "ลูกค้าทั่วไป"),
             )
     conn.close()
 
@@ -85,12 +113,12 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
-def log_activity(client_id, invoice_id, action, detail):
+def log_activity(user_id, client_id, invoice_id, action, detail):
     conn = get_conn()
     with conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO activity_log (client_id, invoice_id, action, detail) VALUES (%s,%s,%s,%s)",
-            (client_id, invoice_id, action, detail),
+            "INSERT INTO activity_log (user_id, client_id, invoice_id, action, detail) VALUES (%s,%s,%s,%s,%s)",
+            (user_id, client_id, invoice_id, action, detail),
         )
     conn.close()
 

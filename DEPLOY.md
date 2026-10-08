@@ -71,6 +71,34 @@ git push -u origin main
 
 ทุกครั้งที่ `git push` โค้ดใหม่ขึ้น branch `main` Vercel จะ deploy เวอร์ชันใหม่ให้อัตโนมัติ
 
+## ระบบ Login / สมัครสมาชิก (Supabase Auth)
+
+เว็บต้องเข้าสู่ระบบก่อนใช้งาน และข้อมูล (ลูกค้า ใบกำกับภาษี ประวัติ) ของแต่ละบัญชีจะแยกจากกัน
+
+1. สร้างโปรเจกต์ที่ [supabase.com](https://supabase.com) (ใช้โปรเจกต์เดียวกับฐานข้อมูลได้เลย)
+2. ไปที่ **Project Settings → API** คัดลอก
+   - `Project URL` → ใส่เป็น `SUPABASE_URL`
+   - `anon public` key → ใส่เป็น `SUPABASE_ANON_KEY` (**ห้าม**ใช้ `service_role` key)
+3. ใส่ทั้งสองค่าใน Vercel → Settings → Environment Variables แล้ว Redeploy
+4. ไปที่ **Authentication → URL Configuration** ตั้ง `Site URL` เป็นโดเมนเว็บ เช่น `https://ai-tax-invoice-webapp.vercel.app`
+   (ลิงก์ยืนยันอีเมลจะพากลับมาที่หน้านี้)
+5. ถ้าไม่ต้องการให้ผู้ใช้ต้องยืนยันอีเมลก่อนเข้าใช้ ปิดได้ที่ **Authentication → Sign In / Providers → Email → Confirm email**
+
+ชื่อ นามสกุล และตำแหน่งที่กรอกตอนสมัคร เก็บใน user metadata ของ Supabase Auth
+ตารางเดิมจะถูกเพิ่มคอลัมน์ `user_id` ให้อัตโนมัติตอนเปิดเว็บครั้งแรก
+ข้อมูลที่มีอยู่ก่อนเพิ่มระบบ login จะยังไม่มีเจ้าของ (มองไม่เห็นจากบัญชีใด) ถ้าต้องการย้ายให้บัญชีของคุณ
+ให้คัดลอก User UID จาก **Authentication → Users** แล้วรันใน SQL Editor:
+
+```sql
+UPDATE clients      SET user_id = 'ใส่-USER-UID' WHERE user_id IS NULL;
+UPDATE invoices     SET user_id = 'ใส่-USER-UID' WHERE user_id IS NULL;
+UPDATE activity_log SET user_id = 'ใส่-USER-UID' WHERE user_id IS NULL;
+```
+
+ตรวจสอบการตั้งค่าได้ที่ `/api/health` (ดู `supabase_url_set` และ `supabase_anon_key_set`)
+
+---
+
 ## ทดสอบในเครื่องก่อน deploy (แนะนำ)
 
 ติดตั้ง Vercel CLI แล้วรันจำลอง serverless environment ในเครื่องได้:
